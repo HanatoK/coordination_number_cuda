@@ -1,8 +1,6 @@
 #include "gpu_kernel.h"
 #include <cub/block/block_reduce.cuh>
 
-// #define USE_WARP_ALT
-
 template <int N, int M, int block_size>
 __global__ void computeCoordinationNumberCUDAKernel1(
   const double* __restrict pos1x,
@@ -31,10 +29,6 @@ __global__ void computeCoordinationNumberCUDAKernel1(
   const unsigned int numBlocksInGroup1 = (numAtoms1 + block_size - 1) / block_size;
   // Number of blocks required to iterate over group2
   const unsigned int numBlocksInGroup2 = (numAtoms2 + block_size - 1) / block_size;
-#ifdef USE_WARP_ALT
-  // Number of warps
-  const unsigned int numWarps = block_size / warpSize;
-#endif
   for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
     unsigned int tid = i * blockDim.x + threadIdx.x;
     // Load the atom i from group1
@@ -55,48 +49,6 @@ __global__ void computeCoordinationNumberCUDAKernel1(
       shJForce[threadIdx.x].y = 0;
       shJForce[threadIdx.x].z = 0;
       __syncthreads();
-      // TODO: I'm not sure if it's better to reduce the access to
-      // shared memory, so I guard the following implementation
-      // by a macro for the time being.
-#ifdef USE_WARP_ALT
-      const unsigned int warpID = threadIdx.x / warpSize;
-      const unsigned int laneID = threadIdx.x % warpSize;
-      // Iterate over the atoms in the shared memory, and
-      // compute the interaction forces between atoms in group1
-      for (unsigned int l = 0; l < numWarps; ++l) {
-        const unsigned int wid = l ^ warpID;
-        const unsigned int jStart = wid * warpSize;
-        const bool smask_jid = shJMask[jStart + laneID];
-        const double sx2 = shPosition[jStart + laneID].x;
-        const double sy2 = shPosition[jStart + laneID].y;
-        const double sz2 = shPosition[jStart + laneID].z;
-        double3 jf{0, 0, 0};
-        for (unsigned int t = 0; t < warpSize; ++t) {
-          const unsigned int jid = (t ^ laneID);
-          const bool mask_jid = __shfl_sync(0xFFFFFFFF, smask_jid, jid);
-          const double x2 = __shfl_sync(0xFFFFFFFF, sx2, jid);
-          const double y2 = __shfl_sync(0xFFFFFFFF, sy2, jid);
-          const double z2 = __shfl_sync(0xFFFFFFFF, sz2, jid);
-          double3 tmpf2{0, 0, 0};
-          if (mask_i && mask_jid) {
-            coordnum<N, M>(
-              x1, x2, y1, y2, z1, z2, inv_r0, ei,
-              iForce.x, iForce.y, iForce.z,
-              tmpf2.x,
-              tmpf2.y,
-              tmpf2.z);
-          }
-          jf.x += __shfl_sync(0xFFFFFFFF, tmpf2.x, jid);
-          jf.y += __shfl_sync(0xFFFFFFFF, tmpf2.y, jid);
-          jf.z += __shfl_sync(0xFFFFFFFF, tmpf2.z, jid);
-          // __syncwarp(0xFFFFFFFF);
-        }
-        shJForce[jStart + laneID].x += jf.x;
-        shJForce[jStart + laneID].y += jf.y;
-        shJForce[jStart + laneID].z += jf.z;
-        __syncthreads();
-      }
-#else
       for (unsigned int t = 0; t < block_size; ++t) {
         // Since we need to store the interaction force into the
         // shared memory buffer, we need to avoid accumulation of
@@ -120,7 +72,6 @@ __global__ void computeCoordinationNumberCUDAKernel1(
         }
         __syncthreads();
       }
-#endif // USE_WARP_ALT
       if (mask_j) {
         // Save the j-forces to group2
         atomicAdd(&fx2[j], shJForce[threadIdx.x].x);
