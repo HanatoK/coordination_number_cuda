@@ -116,6 +116,73 @@ __global__ void computeCoordinationNumberCUDAKernel1(
   }
 }
 
+template <int N, int M, int block_size>
+__global__ void computeCoordinationNumberCUDAKernel2(
+  const double* __restrict pos1x,
+  const double* __restrict pos1y,
+  const double* __restrict pos1z,
+  const double* __restrict pos2x,
+  const double* __restrict pos2y,
+  const double* __restrict pos2z,
+  const unsigned int numAtoms1,
+  const unsigned int numAtoms2,
+  const double inv_r0,
+  double* __restrict energy,
+  double* __restrict fx1,
+  double* __restrict fy1,
+  double* __restrict fz1,
+  double* __restrict fx2,
+  double* __restrict fy2,
+  double* __restrict fz2) {
+  constexpr const unsigned int group2BatchSize = 16;
+  // Total energy
+  double ei = 0;
+  double3 jForce[group2BatchSize] = {{0}};
+  // Number of blocks required to iterate over group1
+  const unsigned int numBlocksInGroup1 = (numAtoms1 + block_size - 1) / block_size;
+  for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
+    unsigned int tid = i * blockDim.x + threadIdx.x;
+    // Load the atom i from group1
+    if (tid < numAtoms1) {
+      const double x1 = pos1x[tid];
+      const double y1 = pos1y[tid];
+      const double z1 = pos1z[tid];
+      double3 iForce{0, 0, 0};
+      for (unsigned int j = 0; j < numAtoms2; ++j) {
+        const double x2 = pos2x[j];
+        const double y2 = pos2y[j];
+        const double z2 = pos2z[j];
+        coordnum<N, M>(
+          x1, x2, y1, y2, z1, z2, inv_r0, ei,
+          iForce.x, iForce.y, iForce.z,
+          jForce[j].x, jForce[j].y, jForce[j].z);
+      }
+      atomicAdd(&fx1[tid], iForce.x);
+      atomicAdd(&fy1[tid], iForce.y);
+      atomicAdd(&fz1[tid], iForce.z);
+    }
+  }
+  // Reduction for energy
+  __syncthreads();
+  typedef cub::BlockReduce<double, block_size> BlockReduce;
+  __shared__ typename BlockReduce::TempStorage temp_storage;
+  const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
+  // #pragma unroll
+  for (unsigned j = 0; j < numAtoms2; ++j) {
+    jForce[j].x = BlockReduce(temp_storage).Sum(jForce[j].x); __syncthreads();
+    jForce[j].y = BlockReduce(temp_storage).Sum(jForce[j].y); __syncthreads();
+    jForce[j].z = BlockReduce(temp_storage).Sum(jForce[j].z); __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    atomicAdd(energy, total_e);
+    for (unsigned j = 0; j < numAtoms2; ++j) {
+      atomicAdd(&fx2[j], jForce[j].x);
+      atomicAdd(&fy2[j], jForce[j].y);
+      atomicAdd(&fz2[j], jForce[j].z);
+    }
+  }
+}
+
 void computeCoordinationNumberCUDA(
   const AtomGroupPositionsCUDA& group1,
   const AtomGroupPositionsCUDA& group2,
@@ -153,42 +220,25 @@ void computeCoordinationNumberCUDA(
   const unsigned int minNumAtoms = std::min(numAtoms1, numAtoms2);
   // I'm not sure if it's necessary to limit the number of blocks
   constexpr const unsigned int maxNumBlocks = 65536;
-  constexpr unsigned int const block_size = 256;
+  constexpr unsigned int const block_size = 128;
   unsigned int num_blocks = (numAtoms1 + block_size - 1) / block_size;
   num_blocks = num_blocks > maxNumBlocks ? maxNumBlocks : num_blocks;
-  // TODO: is this really necessary??
-  if (minNumAtoms > 1024) {
-    constexpr unsigned int const group2WorkSize = 256;
-    checkGPUError(cudaLaunchKernel(
-    (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
-      num_blocks, block_size, args, 0, stream));
-  } else if (minNumAtoms > 512) {
-    constexpr unsigned int const group2WorkSize = 128;
-    checkGPUError(cudaLaunchKernel(
-    (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
-      num_blocks, block_size, args, 0, stream));
-  } else if (minNumAtoms > 256) {
-    constexpr unsigned int const group2WorkSize = 64;
-    checkGPUError(cudaLaunchKernel(
-    (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
-      num_blocks, block_size, args, 0, stream));
-  } else if (minNumAtoms > 128) {
+
+  if (minNumAtoms > 32) {
     constexpr unsigned int const group2WorkSize = 32;
     checkGPUError(cudaLaunchKernel(
     (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
       num_blocks, block_size, args, 0, stream));
-  } else if (minNumAtoms > 64) {
+  } else if (minNumAtoms > 16) {
     constexpr unsigned int const group2WorkSize = 16;
     checkGPUError(cudaLaunchKernel(
     (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
       num_blocks, block_size, args, 0, stream));
-  } else if (minNumAtoms > 32) {
-    constexpr unsigned int const group2WorkSize = 8;
-    checkGPUError(cudaLaunchKernel(
-    (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
-      num_blocks, block_size, args, 0, stream));
   } else {
-    constexpr unsigned int const group2WorkSize = 4;
+    // checkGPUError(cudaLaunchKernel(
+    // (void*)(computeCoordinationNumberCUDAKernel2<6, 12, block_size>),
+    //   num_blocks, block_size, args, 0, stream));
+    constexpr unsigned int const group2WorkSize = 16;
     checkGPUError(cudaLaunchKernel(
     (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
       num_blocks, block_size, args, 0, stream));
