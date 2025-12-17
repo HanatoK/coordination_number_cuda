@@ -178,7 +178,7 @@ void computeCoordinationNumberCUDA(
     (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
       num_blocks, block_size, args, 0, stream));
   } else if (minNumAtoms > 64) {
-    constexpr unsigned int const group2WorkSize = 64;
+    constexpr unsigned int const group2WorkSize = 16;
     checkGPUError(cudaLaunchKernel(
     (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
       num_blocks, block_size, args, 0, stream));
