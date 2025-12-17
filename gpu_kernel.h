@@ -10,6 +10,7 @@ void computeCoordinationNumberCUDA(
   AtomGroupForcesCUDA& force2,
   double inv_r0,
   double* d_energy,
+  cudaGraph_t& graph,
   cudaStream_t stream);
 
 #endif // GPU_KERNEL_H

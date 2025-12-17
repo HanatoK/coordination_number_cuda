@@ -121,12 +121,20 @@ void testCoordinationNumberCUDA(const AtomGroupPositions& pos1, const AtomGroupP
   checkGPUError(cudaMemset(d_energy, 0, sizeof(double)));
   double* h_energy;
   checkGPUError(cudaMallocHost(&h_energy, sizeof(double)));
+  cudaGraph_t graph;
+  checkGPUError(cudaGraphCreate(&graph, 0));
+  computeCoordinationNumberCUDA(
+    cudaPos1, cudaPos2, cudaForce1, cudaForce2,
+    1.0 / cutoffDistance, d_energy, graph, stream);
+  cudaGraphExec_t graph_exec;
+  checkGPUError(cudaGraphInstantiate(&graph_exec, graph));
   checkGPUError(cudaStreamSynchronize(stream));
 
   const auto start = std::chrono::high_resolution_clock::now();
-  computeCoordinationNumberCUDA(
-    cudaPos1, cudaPos2, cudaForce1, cudaForce2,
-    1.0 / cutoffDistance, d_energy, stream);
+  // computeCoordinationNumberCUDA(
+  //   cudaPos1, cudaPos2, cudaForce1, cudaForce2,
+  //   1.0 / cutoffDistance, d_energy, stream);
+  checkGPUError(cudaGraphLaunch(graph_exec, stream));
   checkGPUError(cudaStreamSynchronize(stream));
   const auto end = std::chrono::high_resolution_clock::now();
   const std::chrono::duration<double, std::milli> fp_ms = end - start;
@@ -148,6 +156,8 @@ void testCoordinationNumberCUDA(const AtomGroupPositions& pos1, const AtomGroupP
 
   checkGPUError(cudaFree(d_energy));
   checkGPUError(cudaFreeHost(h_energy));
+  checkGPUError(cudaGraphExecDestroy(graph_exec));
+  checkGPUError(cudaGraphDestroy(graph));
   checkGPUError(cudaStreamDestroy(stream));
 }
 

@@ -190,12 +190,13 @@ void computeCoordinationNumberCUDA(
   AtomGroupForcesCUDA& force2,
   double inv_r0,
   double* d_energy,
+  cudaGraph_t& graph,
   cudaStream_t stream) {
   unsigned int numAtoms1 = group1.getNumAtoms();
   unsigned int numAtoms2 = group2.getNumAtoms();
   if (numAtoms2 > numAtoms1) {
     computeCoordinationNumberCUDA(
-      group2, group1, force2, force1, inv_r0, d_energy, stream);
+      group2, group1, force2, force1, inv_r0, d_energy, graph, stream);
     return;
   }
   const double* pos1x = group1.getDeviceX();
@@ -224,23 +225,39 @@ void computeCoordinationNumberCUDA(
   unsigned int num_blocks = (numAtoms1 + block_size - 1) / block_size;
   num_blocks = num_blocks > maxNumBlocks ? maxNumBlocks : num_blocks;
 
+  cudaKernelNodeParams kernelNodeParams = {0};
+  kernelNodeParams.gridDim        = dim3(num_blocks, 1, 1);
+  kernelNodeParams.blockDim       = dim3(block_size, 1, 1);
+  kernelNodeParams.sharedMemBytes = 0;
+  kernelNodeParams.kernelParams   = args;
+  kernelNodeParams.extra          = NULL;
   if (minNumAtoms > 32) {
-    constexpr unsigned int const group2WorkSize = 32;
-    checkGPUError(cudaLaunchKernel(
-    (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
-      num_blocks, block_size, args, 0, stream));
+    constexpr unsigned int const group2WorkSize = 64;
+    // checkGPUError(cudaLaunchKernel(
+    // (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
+    //   num_blocks, block_size, args, 0, stream));
+    kernelNodeParams.func =
+      (void*)computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>;
   } else if (minNumAtoms > 16) {
     constexpr unsigned int const group2WorkSize = 16;
-    checkGPUError(cudaLaunchKernel(
-    (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
-      num_blocks, block_size, args, 0, stream));
+    // checkGPUError(cudaLaunchKernel(
+    // (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
+    //   num_blocks, block_size, args, 0, stream));
+    kernelNodeParams.func =
+      (void*)computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>;
   } else {
     // checkGPUError(cudaLaunchKernel(
     // (void*)(computeCoordinationNumberCUDAKernel2<6, 12, block_size>),
     //   num_blocks, block_size, args, 0, stream));
-    constexpr unsigned int const group2WorkSize = 16;
-    checkGPUError(cudaLaunchKernel(
-    (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
-      num_blocks, block_size, args, 0, stream));
+    constexpr unsigned int const group2WorkSize = 8;
+    // checkGPUError(cudaLaunchKernel(
+    // (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
+    //   num_blocks, block_size, args, 0, stream));
+    kernelNodeParams.func =
+      (void*)computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>;
   }
+  cudaGraphNode_t node;
+  checkGPUError(cudaGraphAddKernelNode(
+    &node, graph, NULL,
+    0, &kernelNodeParams));
 }
