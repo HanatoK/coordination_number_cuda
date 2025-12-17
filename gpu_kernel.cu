@@ -231,7 +231,7 @@ void computeCoordinationNumberCUDA(
   kernelNodeParams.sharedMemBytes = 0;
   kernelNodeParams.kernelParams   = args;
   kernelNodeParams.extra          = NULL;
-  if (minNumAtoms > 32) {
+  if (minNumAtoms > 64) {
     constexpr unsigned int const group2WorkSize = 64;
     // checkGPUError(cudaLaunchKernel(
     // (void*)(computeCoordinationNumberCUDAKernel1<6, 12, block_size, group2WorkSize, block_size / group2WorkSize>),
