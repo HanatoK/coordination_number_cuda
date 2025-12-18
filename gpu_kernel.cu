@@ -1,6 +1,7 @@
 #include "gpu_kernel.h"
 #include <iostream>
 #include <cub/block/block_reduce.cuh>
+#include <cuda_pipeline.h>
 
 template <int N, int M, int block_size, int group2BatchSize, int numGroup2BatchesPerBlock>
 __global__ void computeCoordinationNumberCUDAKernel1(
@@ -49,14 +50,18 @@ __global__ void computeCoordinationNumberCUDAKernel1(
       const unsigned int j = k * group2BatchSize + group2LaneID;
       if (group2BatchID == 0) {
         const bool mask_j = j < numAtoms2;
-        shJMask[group2LaneID] = mask_j ? true : false;
-        shPosition[group2LaneID].x = mask_j ? pos2x[j] : 0;
-        shPosition[group2LaneID].y = mask_j ? pos2y[j] : 0;
-        shPosition[group2LaneID].z = mask_j ? pos2z[j] : 0;
+        shJMask[group2LaneID] = mask_j;
+        if (mask_j) {
+          __pipeline_memcpy_async(&shPosition[group2LaneID].x, &pos2x[j], sizeof(double));
+          __pipeline_memcpy_async(&shPosition[group2LaneID].y, &pos2y[j], sizeof(double));
+          __pipeline_memcpy_async(&shPosition[group2LaneID].z, &pos2z[j], sizeof(double));
+          __pipeline_commit();
+        }
       }
       shJForce[group2BatchID][group2LaneID].x = 0;
       shJForce[group2BatchID][group2LaneID].y = 0;
       shJForce[group2BatchID][group2LaneID].z = 0;
+      __pipeline_wait_prior(0);
       __syncthreads();
       for (unsigned int t = 0; t < group2BatchSize; ++t) {
         // Since we need to store the interaction force into the
