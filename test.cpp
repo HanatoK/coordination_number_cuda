@@ -4,6 +4,12 @@
 #include <chrono>
 #include "gpu_kernel.h"
 
+struct calculationResult {
+  AtomGroupForces forces1;
+  AtomGroupForces forces2;
+  double energy;
+};
+
 void testNumericalGradient() {
   // Generate two random positions
   const double x1 = 1.0;
@@ -77,15 +83,15 @@ void testNumericalGradient() {
   std::cout << fmt::format("Atom 2: fx = {}, fy = {}, fz = {}\n", numerical_fx2, numerical_fy2, numerical_fz2);
 }
 
-void testCoordinationNumber(const AtomGroupPositions& pos1, const AtomGroupPositions& pos2, double cutoffDistance) {
+calculationResult testCoordinationNumber(const AtomGroupPositions& pos1, const AtomGroupPositions& pos2, double cutoffDistance) {
   const size_t group1_size = pos1.x.size();
   const size_t group2_size = pos2.x.size();
-  
+
   AtomGroupForces forces1;
   forces1.fx.resize(group1_size, 0.0);
   forces1.fy.resize(group1_size, 0.0);
   forces1.fz.resize(group1_size, 0.0);
-  
+
   AtomGroupForces forces2;
   forces2.fx.resize(group2_size, 0.0);
   forces2.fy.resize(group2_size, 0.0);
@@ -98,16 +104,17 @@ void testCoordinationNumber(const AtomGroupPositions& pos1, const AtomGroupPosit
   const auto end = std::chrono::high_resolution_clock::now();
   const std::chrono::duration<double, std::milli> fp_ms = end - start;
   
-  std::cout << fmt::format("Coordination number: {:15.7e}, time = {:10.5f} ms\n", energy, fp_ms.count());
+  std::cout << fmt::format("Coordination number: {:15.7e}, time (CPU) = {:10.5f} ms\n", energy, fp_ms.count());
 
   // Save positions and forces to files for further analysis if needed
-  writeToFile(pos1.x, pos1.y, pos1.z, "positions1.txt");
-  writeToFile(pos2.x, pos2.y, pos2.z, "positions2.txt");
-  writeToFile(forces1.fx, forces1.fy, forces1.fz, "forces1.txt");
-  writeToFile(forces2.fx, forces2.fy, forces2.fz, "forces2.txt");
+  // writeToFile(pos1.x, pos1.y, pos1.z, "positions1.txt");
+  // writeToFile(pos2.x, pos2.y, pos2.z, "positions2.txt");
+  // writeToFile(forces1.fx, forces1.fy, forces1.fz, "forces1.txt");
+  // writeToFile(forces2.fx, forces2.fy, forces2.fz, "forces2.txt");
+  return calculationResult{forces1, forces2, energy};
 }
 
-void testCoordinationNumberCUDA(const AtomGroupPositions& pos1, const AtomGroupPositions& pos2, double cutoffDistance) {
+calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, const AtomGroupPositions& pos2, double cutoffDistance) {
   cudaStream_t stream;
   checkGPUError(cudaStreamCreate(&stream));
   AtomGroupPositionsCUDA cudaPos1(pos1, stream);
@@ -142,23 +149,60 @@ void testCoordinationNumberCUDA(const AtomGroupPositions& pos1, const AtomGroupP
   checkGPUError(cudaMemcpyAsync(h_energy, d_energy, sizeof(double), cudaMemcpyDeviceToHost, stream));
   checkGPUError(cudaStreamSynchronize(stream));
 
-  std::cout << fmt::format("Coordination number: {:15.7e}, time = {:10.5f} ms\n", *h_energy, fp_ms.count());
+  std::cout << fmt::format("Coordination number: {:15.7e}, time (GPU) = {:10.5f} ms\n", *h_energy, fp_ms.count());
+  const double energy = *h_energy;
   const auto hostForce1 = cudaForce1.toHost();
   const auto hostForce2 = cudaForce2.toHost();
-  writeToFile(hostForce1.fx,
-              hostForce1.fy,
-              hostForce1.fz,
-              "forces1_cuda.txt");
-  writeToFile(hostForce2.fx,
-              hostForce2.fy,
-              hostForce2.fz,
-              "forces2_cuda.txt");
+  // writeToFile(hostForce1.fx,
+  //             hostForce1.fy,
+  //             hostForce1.fz,
+  //             "forces1_cuda.txt");
+  // writeToFile(hostForce2.fx,
+  //             hostForce2.fy,
+  //             hostForce2.fz,
+  //             "forces2_cuda.txt");
 
   checkGPUError(cudaFree(d_energy));
   checkGPUError(cudaFreeHost(h_energy));
   checkGPUError(cudaGraphExecDestroy(graph_exec));
   checkGPUError(cudaGraphDestroy(graph));
   checkGPUError(cudaStreamDestroy(stream));
+  return calculationResult{hostForce1, hostForce2, energy};
+}
+
+void compareResults(const calculationResult& cpuResult, const calculationResult& cudaResult) {
+  double maxRelErrorForces1x = 0;
+  double maxRelErrorForces1y = 0;
+  double maxRelErrorForces1z = 0;
+  const size_t numForces1 = cpuResult.forces1.fx.size();
+  for (size_t i = 0; i < numForces1; ++i) {
+    const double diff_x = std::abs(cpuResult.forces1.fx[i] - cudaResult.forces1.fx[i]) / std::abs(cpuResult.forces1.fx[i]);
+    const double diff_y = std::abs(cpuResult.forces1.fy[i] - cudaResult.forces1.fy[i]) / std::abs(cpuResult.forces1.fy[i]);
+    const double diff_z = std::abs(cpuResult.forces1.fz[i] - cudaResult.forces1.fz[i]) / std::abs(cpuResult.forces1.fz[i]);
+    maxRelErrorForces1x = std::max(diff_x, maxRelErrorForces1x);
+    maxRelErrorForces1y = std::max(diff_y, maxRelErrorForces1y);
+    maxRelErrorForces1z = std::max(diff_z, maxRelErrorForces1z);
+  }
+  std::cout << fmt::format("Max relative error of forces1: {:15.7e} {:15.7e} {:15.7e}\n",
+                           maxRelErrorForces1x, maxRelErrorForces1y, maxRelErrorForces1z);
+
+  double maxRelErrorForces2x = 0;
+  double maxRelErrorForces2y = 0;
+  double maxRelErrorForces2z = 0;
+  const size_t numForces2 = cpuResult.forces2.fx.size();
+  for (size_t i = 0; i < numForces2; ++i) {
+    const double diff_x = std::abs(cpuResult.forces2.fx[i] - cudaResult.forces2.fx[i]) / std::abs(cpuResult.forces2.fx[i]);
+    const double diff_y = std::abs(cpuResult.forces2.fy[i] - cudaResult.forces2.fy[i]) / std::abs(cpuResult.forces2.fy[i]);
+    const double diff_z = std::abs(cpuResult.forces2.fz[i] - cudaResult.forces2.fz[i]) / std::abs(cpuResult.forces2.fz[i]);
+    maxRelErrorForces2x = std::max(diff_x, maxRelErrorForces2x);
+    maxRelErrorForces2y = std::max(diff_y, maxRelErrorForces2y);
+    maxRelErrorForces2z = std::max(diff_z, maxRelErrorForces2z);
+  }
+  std::cout << fmt::format("Max relative error of forces2: {:15.7e} {:15.7e} {:15.7e}\n",
+                           maxRelErrorForces2x, maxRelErrorForces2y, maxRelErrorForces2z);
+
+  const double relErrorE = std::abs(cpuResult.energy - cudaResult.energy) / std::abs(cpuResult.energy);
+  std::cout << fmt::format("Relative error of coordination number: {:15.7e}\n", relErrorE);
 }
 
 int main(int argc, char* argv[]) {
@@ -170,7 +214,8 @@ int main(int argc, char* argv[]) {
   AtomGroupPositions pos1 = generateRandomAtomGroupPositions(123, group1_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
   AtomGroupPositions pos2 = generateRandomAtomGroupPositions(456, group2_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
   double cutoffDistance = 6.0;
-  testCoordinationNumber(pos1, pos2, cutoffDistance);
-  testCoordinationNumberCUDA(pos1, pos2, cutoffDistance);
+  const auto cpuResult = testCoordinationNumber(pos1, pos2, cutoffDistance);
+  const auto gpuResult = testCoordinationNumberCUDA(pos1, pos2, cutoffDistance);
+  compareResults(cpuResult, gpuResult);
   return 0;
 }
