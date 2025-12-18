@@ -33,8 +33,8 @@ __global__ void computeCoordinationNumberCUDAKernel1(
   // Number of blocks required to iterate over group1
   const unsigned int numBlocksInGroup1 = (numAtoms1 + block_size - 1) / block_size;
   // Number of blocks required to iterate over group2
-  // const unsigned int group2WorkSize = group2BatchSize * numGroup2BatchesPerBlock;
   const unsigned int numBatchesInGroup2 = (numAtoms2 + group2BatchSize - 1) / group2BatchSize;
+  const unsigned int group2WorkSize = numBatchesInGroup2 * group2BatchSize;
   const unsigned int group2BatchID = threadIdx.x / group2BatchSize;
   const unsigned int group2LaneID = threadIdx.x % group2BatchSize;
   for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
@@ -46,8 +46,8 @@ __global__ void computeCoordinationNumberCUDAKernel1(
     const double z1 = mask_i ? pos1z[tid] : 0;
     double3 iForce{0, 0, 0};
     // Load atom j from group2
-    for (unsigned int k = 0; k < numBatchesInGroup2; ++k) {
-      const unsigned int j = k * group2BatchSize + group2LaneID;
+    for (unsigned int k = 0; k < group2WorkSize; k += group2BatchSize) {
+      const unsigned int j = k + group2LaneID;
       if (group2BatchID == 0) {
         const bool mask_j = j < numAtoms2;
         if (mask_j) {
