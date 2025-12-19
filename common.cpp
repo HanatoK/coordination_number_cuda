@@ -55,6 +55,33 @@ void computeCoordinationNumberTwoGroups(
   }
 }
 
+void computeCoordinationNumberSelfGroup(
+  const AtomGroupPositions& pos1,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& gradients1) {
+  const size_t numAtoms1 = pos1.x.size();
+  if (numAtoms1 < 2) return;
+  for (size_t i = 0; i < numAtoms1 - 1; ++i) {
+    double gx1 = 0.0, gy1 = 0.0, gz1 = 0.0;
+    const double x1 = pos1.x[i];
+    const double y1 = pos1.y[i];
+    const double z1 = pos1.z[i];
+    double ei = 0.0;
+    for (size_t j = i; j < numAtoms1; ++j) {
+      const double x2 = pos1.x[j];
+      const double y2 = pos1.y[j];
+      const double z2 = pos1.z[j];
+      coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei, gx1, gy1, gz1,
+                      gradients1.gx[j], gradients1.gy[j], gradients1.gz[j]);
+    }
+    energy += ei;
+    gradients1.gx[i] += gx1;
+    gradients1.gy[i] += gy1;
+    gradients1.gz[i] += gz1;
+  }
+}
+
 void writeToFile(
   const std::vector<double>& x,
   const std::vector<double>& y,

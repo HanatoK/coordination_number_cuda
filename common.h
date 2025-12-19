@@ -124,8 +124,14 @@ void computeCoordinationNumberTwoGroups(
   const AtomGroupPositions& pos2,
   double inv_r0,
   double& energy,
-  AtomGroupGradients& forces1,
-  AtomGroupGradients& forces2);
+  AtomGroupGradients& gradients1,
+  AtomGroupGradients& gradients2);
+
+void computeCoordinationNumberSelfGroup(
+  const AtomGroupPositions& pos1,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& gradients1);
 
 inline __host__ __device__ double integer_power(double const& x, int const n) {
   double yy, ww;
@@ -176,7 +182,7 @@ inline void __host__ __device__ coordnum(
   double const func = xn * xd_inv;
   energy += func < 0 ? 0.0 : func;
   if (func > 0.0) {
-    // Compute forces: the negative of the gradients
+    // Compute gradients: the negative of the gradients
     const double dfunc_dr2 = (nxn_1 - dxd_1 * func) * xd_inv;
     // const double dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
     const double dr2_dx = 2.0 * dx * inv_r0_x;

@@ -196,3 +196,122 @@ void computeCoordinationNumberTwoGroupsCUDA(
     &node, graph, NULL,
     0, &kernelNodeParams));
 }
+
+template <int N, int M, int block_size>
+__global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
+  const double* __restrict pos1x,
+  const double* __restrict pos1y,
+  const double* __restrict pos1z,
+  const unsigned int numAtoms1,
+  unsigned int* numBlocksPerIBlock,
+  unsigned int** blocksList,
+  const double inv_r0,
+  double* __restrict energy,
+  double* __restrict gx1,
+  double* __restrict gy1,
+  double* __restrict gz1) {
+  __shared__ double3 shPosition[block_size];
+  __shared__ bool shMask[block_size];
+  __shared__ double3 shGrad[block_size];
+  // Total energy
+  double ei = 0;
+  // Number of blocks required to iterate over group1
+  const unsigned int numBlocksInGroup1 = (numAtoms1 + block_size - 1) / block_size;
+  for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
+    // Self block
+    const unsigned int tid = i * blockDim.x + threadIdx.x;
+    // Load the atom i from group1
+    const bool mask_i = tid < numAtoms1;
+    const double x1 = mask_i ? pos1x[tid] : 0;
+    const double y1 = mask_i ? pos1y[tid] : 0;
+    const double z1 = mask_i ? pos1z[tid] : 0;
+    shPosition[threadIdx.x].x = x1;
+    shPosition[threadIdx.x].y = y1;
+    shPosition[threadIdx.x].z = z1;
+    shGrad[threadIdx.x] = double3{0, 0, 0};
+    shMask[threadIdx.x] = mask_i;
+    __syncthreads();
+    double3 iGrad{0, 0, 0};
+    // TODO: load-imbalance inside a block (also warps). What should I do??
+    for (unsigned int j = threadIdx.x; j < block_size; ++j) {
+      const unsigned int jid = j ^ threadIdx.x;
+      const bool mask_jid = shMask[jid];
+      if (threadIdx.x < block_size - 1) {
+        if (mask_i && mask_jid) {
+          const double x2 = shPosition[jid].x;
+          const double y2 = shPosition[jid].y;
+          const double z2 = shPosition[jid].z;
+          coordnum<N, M>(
+            x1, x2,
+            y1, y2,
+            z1, z2,
+            inv_r0, inv_r0, inv_r0, ei,
+            iGrad.x, iGrad.y, iGrad.z,
+            shGrad[jid].x,
+            shGrad[jid].y,
+            shGrad[jid].z);
+        }
+      }
+      __syncthreads();
+    }
+    if (mask_i) {
+      atomicAdd(&gx1[tid], shGrad[threadIdx.x].x);
+      atomicAdd(&gy1[tid], shGrad[threadIdx.x].y);
+      atomicAdd(&gz1[tid], shGrad[threadIdx.x].z);
+    }
+    __syncthreads();
+    // Other blocks in the block lists
+    const unsigned int numJBlocks = numBlocksPerIBlock[i];
+    const unsigned int* blocksAtI = blocksList[i];
+    for (unsigned int k = 0; k < numJBlocks; ++k) {
+      const unsigned int jBlock = blocksAtI[k];
+      const unsigned int tid_j = jBlock * blockDim.x + threadIdx.x;
+      const bool mask_j = tid_j < numAtoms1;
+      // Load the j-block into the shared memory
+      shPosition[threadIdx.x].x = mask_j ? pos1x[tid_j] : 0;
+      shPosition[threadIdx.x].y = mask_j ? pos1y[tid_j] : 0;
+      shPosition[threadIdx.x].z = mask_j ? pos1z[tid_j] : 0;
+      shGrad[threadIdx.x] = double3{0, 0, 0};
+      shMask[threadIdx.x] = mask_j;
+      __syncthreads();
+      for (unsigned int t = 0; t < block_size; ++t) {
+        const unsigned int jid = t ^ threadIdx.x;
+        const bool mask_jid = shMask[jid];
+        if (mask_i && mask_jid) {
+          const double x2 = shPosition[jid].x;
+          const double y2 = shPosition[jid].y;
+          const double z2 = shPosition[jid].z;
+          coordnum<N, M>(
+            x1, x2,
+            y1, y2,
+            z1, z2,
+            inv_r0, inv_r0, inv_r0, ei,
+            iGrad.x, iGrad.y, iGrad.z,
+            shGrad[jid].x,
+            shGrad[jid].y,
+            shGrad[jid].z);
+        }
+        __syncthreads();
+      }
+      if (mask_j) {
+        atomicAdd(&gx1[tid_j], shGrad[threadIdx.x].x);
+        atomicAdd(&gy1[tid_j], shGrad[threadIdx.x].y);
+        atomicAdd(&gz1[tid_j], shGrad[threadIdx.x].z);
+      }
+    }
+    // Add i-forces
+    if (mask_i) {
+      atomicAdd(&gx1[tid], iGrad.x);
+      atomicAdd(&gy1[tid], iGrad.y);
+      atomicAdd(&gz1[tid], iGrad.z);
+    }
+  }
+  // Reduction for energy
+  __syncthreads();
+  typedef cub::BlockReduce<double, block_size> BlockReduce;
+  __shared__ typename BlockReduce::TempStorage temp_storage;
+  const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
+  if (threadIdx.x == 0) {
+    atomicAdd(energy, total_e);
+  }
+}
