@@ -38,7 +38,7 @@ __global__ void computeCoordinationNumberCUDAKernel1(
   const unsigned int group2BatchID = threadIdx.x / group2BatchSize;
   const unsigned int group2LaneID = threadIdx.x % group2BatchSize;
   for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
-    unsigned int tid = i * blockDim.x + threadIdx.x;
+    const unsigned int tid = i * blockDim.x + threadIdx.x;
     // Load the atom i from group1
     const bool mask_i = tid < numAtoms1;
     const double x1 = mask_i ? pos1x[tid] : 0;
@@ -78,7 +78,7 @@ __global__ void computeCoordinationNumberCUDAKernel1(
           const double y2 = shPosition[jid].y;
           const double z2 = shPosition[jid].z;
           coordnum<N, M>(
-            x1, x2, y1, y2, z1, z2, inv_r0, ei,
+            x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
             iForce.x, iForce.y, iForce.z,
             shJForce[group2BatchID][jid].x,
             shJForce[group2BatchID][jid].y,

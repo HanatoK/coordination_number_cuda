@@ -23,64 +23,64 @@ void testNumericalGradient() {
   double energy = 0.0;
   double fx1 = 0.0, fy1 = 0.0, fz1 = 0.0;
   double fx2 = 0.0, fy2 = 0.0, fz2 = 0.0;
-  coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, energy,
+  coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  std::cout << fmt::format("Analytical forces:\n");
-  std::cout << fmt::format("Atom 1: fx = {}, fy = {}, fz = {}\n", fx1, fy1, fz1);
-  std::cout << fmt::format("Atom 2: fx = {}, fy = {}, fz = {}\n", fx2, fy2, fz2);
+  std::cout << fmt::format("Analytical gradients:\n");
+  std::cout << fmt::format("Atom 1: dx = {}, dy = {}, dz = {}\n", fx1, fy1, fz1);
+  std::cout << fmt::format("Atom 2: dx = {}, dy = {}, dz = {}\n", fx2, fy2, fz2);
   std::cout << fmt::format("Energy: {}\n", energy);
   // Numerical gradient
   const double delta = 1e-5;
   double energy_prev = 0, energy_next = 0;
   // For position x1
-  coordnum<6, 12>(x1 - delta, x2, y1, y2, z1, z2, inv_r0, energy_prev,
+  coordnum<6, 12>(x1 - delta, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  coordnum<6, 12>(x1 + delta, x2, y1, y2, z1, z2, inv_r0, energy_next,
+  coordnum<6, 12>(x1 + delta, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  double numerical_fx1 = -(energy_next - energy_prev) / (2 * delta);
+  double numerical_fx1 = (energy_next - energy_prev) / (2 * delta);
   // For position y1
   energy_prev = 0;
   energy_next = 0;
-  coordnum<6, 12>(x1, x2, y1 - delta, y2, z1, z2, inv_r0, energy_prev,
+  coordnum<6, 12>(x1, x2, y1 - delta, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  coordnum<6, 12>(x1, x2, y1 + delta, y2, z1, z2, inv_r0, energy_next,
+  coordnum<6, 12>(x1, x2, y1 + delta, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  double numerical_fy1 = -(energy_next - energy_prev) / (2 * delta);
+  double numerical_fy1 = (energy_next - energy_prev) / (2 * delta);
   // For position z1
   energy_prev = 0;
   energy_next = 0;
-  coordnum<6, 12>(x1, x2, y1, y2, z1 - delta, z2, inv_r0, energy_prev,
+  coordnum<6, 12>(x1, x2, y1, y2, z1 - delta, z2, inv_r0, inv_r0, inv_r0, energy_prev,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  coordnum<6, 12>(x1, x2, y1, y2, z1 + delta, z2, inv_r0, energy_next,
+  coordnum<6, 12>(x1, x2, y1, y2, z1 + delta, z2, inv_r0, inv_r0, inv_r0, energy_next,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  double numerical_fz1 = -(energy_next - energy_prev) / (2 * delta);
-  std::cout << fmt::format("Numerical forces:\n");
-  std::cout << fmt::format("Atom 1: fx = {}, fy = {}, fz = {}\n", numerical_fx1, numerical_fy1, numerical_fz1);
+  double numerical_fz1 = (energy_next - energy_prev) / (2 * delta);
+  std::cout << fmt::format("Numerical gradients:\n");
+  std::cout << fmt::format("Atom 1: dx = {}, dy = {}, dz = {}\n", numerical_fx1, numerical_fy1, numerical_fz1);
   // For position x2
   energy_prev = 0;
   energy_next = 0;
-  coordnum<6, 12>(x1, x2 - delta, y1, y2, z1, z2, inv_r0, energy_prev,
+  coordnum<6, 12>(x1, x2 - delta, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  coordnum<6, 12>(x1, x2 + delta, y1, y2, z1, z2, inv_r0, energy_next,
+  coordnum<6, 12>(x1, x2 + delta, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  double numerical_fx2 = -(energy_next - energy_prev) / (2 * delta);
+  double numerical_fx2 = (energy_next - energy_prev) / (2 * delta);
   // For position y2
   energy_prev = 0;
   energy_next = 0;
-  coordnum<6, 12>(x1, x2, y1, y2 - delta, z1, z2, inv_r0, energy_prev,
+  coordnum<6, 12>(x1, x2, y1, y2 - delta, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  coordnum<6, 12>(x1, x2, y1, y2 + delta, z1, z2, inv_r0, energy_next,
+  coordnum<6, 12>(x1, x2, y1, y2 + delta, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  double numerical_fy2 = -(energy_next - energy_prev) / (2 * delta);
+  double numerical_fy2 = (energy_next - energy_prev) / (2 * delta);
   // For position z2
   energy_prev = 0;
   energy_next = 0;
-  coordnum<6, 12>(x1, x2, y1, y2, z1, z2 - delta, inv_r0, energy_prev,
+  coordnum<6, 12>(x1, x2, y1, y2, z1, z2 - delta, inv_r0, inv_r0, inv_r0, energy_prev,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  coordnum<6, 12>(x1, x2, y1, y2, z1, z2 + delta, inv_r0, energy_next,
+  coordnum<6, 12>(x1, x2, y1, y2, z1, z2 + delta, inv_r0, inv_r0, inv_r0, energy_next,
                   fx1, fy1, fz1, fx2, fy2, fz2);
-  double numerical_fz2 = -(energy_next - energy_prev) / (2 * delta);
-  std::cout << fmt::format("Atom 2: fx = {}, fy = {}, fz = {}\n", numerical_fx2, numerical_fy2, numerical_fz2);
+  double numerical_fz2 = (energy_next - energy_prev) / (2 * delta);
+  std::cout << fmt::format("Atom 2: dx = {}, dy = {}, dz = {}\n", numerical_fx2, numerical_fy2, numerical_fz2);
 }
 
 calculationResult testCoordinationNumber(const AtomGroupPositions& pos1, const AtomGroupPositions& pos2, double cutoffDistance) {
@@ -109,8 +109,8 @@ calculationResult testCoordinationNumber(const AtomGroupPositions& pos1, const A
   // Save positions and forces to files for further analysis if needed
   // writeToFile(pos1.x, pos1.y, pos1.z, "positions1.txt");
   // writeToFile(pos2.x, pos2.y, pos2.z, "positions2.txt");
-  // writeToFile(forces1.fx, forces1.fy, forces1.fz, "forces1.txt");
-  // writeToFile(forces2.fx, forces2.fy, forces2.fz, "forces2.txt");
+  // writeToFile(forces1.fx, forces1.fy, forces1.fz, "gradients1.txt");
+  // writeToFile(forces2.fx, forces2.fy, forces2.fz, "gradients2.txt");
   return calculationResult{forces1, forces2, energy};
 }
 
@@ -156,11 +156,11 @@ calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, con
   // writeToFile(hostForce1.fx,
   //             hostForce1.fy,
   //             hostForce1.fz,
-  //             "forces1_cuda.txt");
+  //             "gradients1_cuda.txt");
   // writeToFile(hostForce2.fx,
   //             hostForce2.fy,
   //             hostForce2.fz,
-  //             "forces2_cuda.txt");
+  //             "gradients2_cuda.txt");
 
   checkGPUError(cudaFree(d_energy));
   checkGPUError(cudaFreeHost(h_energy));
@@ -183,7 +183,7 @@ void compareResults(const calculationResult& cpuResult, const calculationResult&
     maxRelErrorForces1y = std::max(diff_y, maxRelErrorForces1y);
     maxRelErrorForces1z = std::max(diff_z, maxRelErrorForces1z);
   }
-  std::cout << fmt::format("Max relative error of forces1: {:15.7e} {:15.7e} {:15.7e}\n",
+  std::cout << fmt::format("Max relative error of gradients of group1: {:15.7e} {:15.7e} {:15.7e}\n",
                            maxRelErrorForces1x, maxRelErrorForces1y, maxRelErrorForces1z);
 
   double maxRelErrorForces2x = 0;
@@ -198,7 +198,7 @@ void compareResults(const calculationResult& cpuResult, const calculationResult&
     maxRelErrorForces2y = std::max(diff_y, maxRelErrorForces2y);
     maxRelErrorForces2z = std::max(diff_z, maxRelErrorForces2z);
   }
-  std::cout << fmt::format("Max relative error of forces2: {:15.7e} {:15.7e} {:15.7e}\n",
+  std::cout << fmt::format("Max relative error of gradients of group2: {:15.7e} {:15.7e} {:15.7e}\n",
                            maxRelErrorForces2x, maxRelErrorForces2y, maxRelErrorForces2z);
 
   const double relErrorE = std::abs(cpuResult.energy - cudaResult.energy) / std::abs(cpuResult.energy);
@@ -206,7 +206,7 @@ void compareResults(const calculationResult& cpuResult, const calculationResult&
 }
 
 int main(int argc, char* argv[]) {
-  // testNumericalGradient();
+  testNumericalGradient();
   unsigned int group1_size = 10000;
   unsigned int group2_size = 2005;
   if (argc > 1) group1_size = std::stoull(argv[1]);

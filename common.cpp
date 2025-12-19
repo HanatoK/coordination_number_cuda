@@ -44,7 +44,7 @@ void computeCoordinationNumber(const AtomGroupPositions& pos1,
       const double x2 = pos2.x[j];
       const double y2 = pos2.y[j];
       const double z2 = pos2.z[j];
-      coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, ei, fx1, fy1, fz1,
+      coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei, fx1, fy1, fz1,
                       forces2.fx[j], forces2.fy[j], forces2.fz[j]);
     }
     energy += ei;
