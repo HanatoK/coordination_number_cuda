@@ -25,9 +25,13 @@ __global__ void computeCoordinationNumberCUDAKernel1(
   static_assert(block_size == group2BatchSize * numGroup2BatchesPerBlock,
                 "block_size != group2BatchSize * numGroup2BatchesPerBlock");
   // Shared memory buffers for atoms in group2
-  __shared__ double3 shPosition[group2BatchSize];
+  __shared__ double3 shJPosition[group2BatchSize];
   __shared__ double3 shJForce[numGroup2BatchesPerBlock][group2BatchSize];
   __shared__ bool shJMask[group2BatchSize];
+  constexpr const unsigned int iBlock = 4;
+  double3 iPosition[iBlock];
+  bool maskI[iBlock];
+  double3 iForce[iBlock];
   // Total energy
   double ei = 0;
   // Number of blocks required to iterate over group1
@@ -37,23 +41,30 @@ __global__ void computeCoordinationNumberCUDAKernel1(
   const unsigned int group2WorkSize = numBatchesInGroup2 * group2BatchSize;
   const unsigned int group2BatchID = threadIdx.x / group2BatchSize;
   const unsigned int group2LaneID = threadIdx.x % group2BatchSize;
-  for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
-    unsigned int tid = i * blockDim.x + threadIdx.x;
-    // Load the atom i from group1
-    const bool mask_i = tid < numAtoms1;
-    const double x1 = mask_i ? pos1x[tid] : 0;
-    const double y1 = mask_i ? pos1y[tid] : 0;
-    const double z1 = mask_i ? pos1z[tid] : 0;
-    double3 iForce{0, 0, 0};
+  for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += iBlock * gridDim.x) {
+    // Load multiple batches of i-atoms
+    #pragma unroll
+    for (unsigned int ii = 0; ii < iBlock; ++ii) {
+      const unsigned int tid = (ii * gridDim.x + i) * blockDim.x + threadIdx.x;
+      maskI[ii] = tid < numAtoms1;
+      if (maskI[ii]) {
+        iPosition[ii].x = pos1x[tid];
+        iPosition[ii].y = pos1y[tid];
+        iPosition[ii].z = pos1z[tid];
+      }
+      iForce[ii].x = 0;
+      iForce[ii].y = 0;
+      iForce[ii].z = 0;
+    }
     // Load atom j from group2
     for (unsigned int k = 0; k < group2WorkSize; k += group2BatchSize) {
       const unsigned int j = k + group2LaneID;
       if (group2BatchID == 0) {
         const bool mask_j = j < numAtoms2;
         if (mask_j) {
-          __pipeline_memcpy_async(&shPosition[group2LaneID].x, &pos2x[j], sizeof(double));
-          __pipeline_memcpy_async(&shPosition[group2LaneID].y, &pos2y[j], sizeof(double));
-          __pipeline_memcpy_async(&shPosition[group2LaneID].z, &pos2z[j], sizeof(double));
+          __pipeline_memcpy_async(&shJPosition[group2LaneID].x, &pos2x[j], sizeof(double));
+          __pipeline_memcpy_async(&shJPosition[group2LaneID].y, &pos2y[j], sizeof(double));
+          __pipeline_memcpy_async(&shJPosition[group2LaneID].z, &pos2z[j], sizeof(double));
           __pipeline_commit();
         }
         shJMask[group2LaneID] = mask_j;
@@ -72,17 +83,21 @@ __global__ void computeCoordinationNumberCUDAKernel1(
         // Another swizzling method using XOR from possibly CuTe
         // (see also https://zhuanlan.zhihu.com/p/1941306442683515068)
         const unsigned int jid = t ^ group2LaneID;
-        const bool mask_jid = shJMask[jid];
-        if (mask_i && mask_jid) {
-          const double x2 = shPosition[jid].x;
-          const double y2 = shPosition[jid].y;
-          const double z2 = shPosition[jid].z;
-          coordnum<N, M>(
-            x1, x2, y1, y2, z1, z2, inv_r0, ei,
-            iForce.x, iForce.y, iForce.z,
-            shJForce[group2BatchID][jid].x,
-            shJForce[group2BatchID][jid].y,
-            shJForce[group2BatchID][jid].z);
+        #pragma unroll
+        for (unsigned int ii = 0; ii < iBlock; ++ii) {
+          const double x2 = shJPosition[jid].x;
+          const double y2 = shJPosition[jid].y;
+          const double z2 = shJPosition[jid].z;
+          if (maskI[ii] && shJMask[jid]) {
+            coordnum<N, M>(
+              iPosition[ii].x, x2,
+              iPosition[ii].y, y2,
+              iPosition[ii].z, z2, inv_r0, ei,
+              iForce[ii].x, iForce[ii].y, iForce[ii].z,
+              shJForce[group2BatchID][jid].x,
+              shJForce[group2BatchID][jid].y,
+              shJForce[group2BatchID][jid].z);
+          }
         }
         __syncthreads();
       }
@@ -105,11 +120,14 @@ __global__ void computeCoordinationNumberCUDAKernel1(
       }
       __syncthreads();
     }
-    if (mask_i) {
-      // Save the i-forces to group1
-      atomicAdd(&fx1[tid], iForce.x);
-      atomicAdd(&fy1[tid], iForce.y);
-      atomicAdd(&fz1[tid], iForce.z);
+    #pragma unroll
+    for (unsigned int ii = 0; ii < iBlock; ++ii) {
+      if (maskI[ii]) {
+        const unsigned int tid = (ii * gridDim.x + i) * blockDim.x + threadIdx.x;
+        atomicAdd(&fx1[tid], iForce[ii].x);
+        atomicAdd(&fy1[tid], iForce[ii].y);
+        atomicAdd(&fz1[tid], iForce[ii].z);
+      }
     }
   }
   // Reduction for energy
