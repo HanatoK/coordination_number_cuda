@@ -25,10 +25,10 @@ struct AtomGroupPositions {
   std::vector<double> z;
 };
 
-struct AtomGroupForces {
-  std::vector<double> fx;
-  std::vector<double> fy;
-  std::vector<double> fz;
+struct AtomGroupGradients {
+  std::vector<double> gx;
+  std::vector<double> gy;
+  std::vector<double> gz;
 };
 
 void writeToFile(
@@ -73,51 +73,43 @@ public:
   size_t getNumAtoms() const { return numAtoms; }
 };
 
-class AtomGroupForcesCUDA {
+class AtomGroupGradientsCUDA {
 private:
-  double *d_fx;
-  double *d_fy;
-  double *d_fz;
+  double *d_gx;
+  double *d_gy;
+  double *d_gz;
   size_t numAtoms;
   // size_t atomStorageSize;
   cudaStream_t stream;
 public:
-  AtomGroupForcesCUDA(): d_fx(nullptr), d_fy(nullptr), d_fz(nullptr), numAtoms(0), /*atomStorageSize(0),*/ stream(0) {}
-  ~AtomGroupForcesCUDA() {
-    if (d_fx) cudaFree(d_fx);
-    if (d_fy) cudaFree(d_fy);
-    if (d_fz) cudaFree(d_fz);
+  AtomGroupGradientsCUDA(): d_gx(nullptr), d_gy(nullptr), d_gz(nullptr), numAtoms(0), /*atomStorageSize(0),*/ stream(0) {}
+  ~AtomGroupGradientsCUDA() {
+    if (d_gx) cudaFree(d_gx);
+    if (d_gy) cudaFree(d_gy);
+    if (d_gz) cudaFree(d_gz);
   }
   void initialize(size_t numAtomsInput, cudaStream_t stream_in, size_t clusterSize = 1) {
     numAtoms = numAtomsInput;
     stream = stream_in;
-    // const size_t numClusters = size_t(numAtoms / clusterSize) + ((numAtoms % clusterSize) ? 1 : 0);
-    // // atomStorageSize = numClusters * clusterSize;
-    // checkGPUError(cudaMalloc(&d_fx, atomStorageSize * sizeof(double)));
-    // checkGPUError(cudaMalloc(&d_fy, atomStorageSize * sizeof(double)));
-    // checkGPUError(cudaMalloc(&d_fz, atomStorageSize * sizeof(double)));
-    // checkGPUError(cudaMemsetAsync(d_fx, 0, atomStorageSize * sizeof(double), stream));
-    // checkGPUError(cudaMemsetAsync(d_fy, 0, atomStorageSize * sizeof(double), stream));
-    // checkGPUError(cudaMemsetAsync(d_fz, 0, atomStorageSize * sizeof(double), stream));
-    checkGPUError(cudaMalloc(&d_fx, numAtoms * sizeof(double)));
-    checkGPUError(cudaMalloc(&d_fy, numAtoms * sizeof(double)));
-    checkGPUError(cudaMalloc(&d_fz, numAtoms * sizeof(double)));
-    checkGPUError(cudaMemsetAsync(d_fx, 0, numAtoms * sizeof(double), stream));
-    checkGPUError(cudaMemsetAsync(d_fy, 0, numAtoms * sizeof(double), stream));
-    checkGPUError(cudaMemsetAsync(d_fz, 0, numAtoms * sizeof(double), stream));
+    checkGPUError(cudaMalloc(&d_gx, numAtoms * sizeof(double)));
+    checkGPUError(cudaMalloc(&d_gy, numAtoms * sizeof(double)));
+    checkGPUError(cudaMalloc(&d_gz, numAtoms * sizeof(double)));
+    checkGPUError(cudaMemsetAsync(d_gx, 0, numAtoms * sizeof(double), stream));
+    checkGPUError(cudaMemsetAsync(d_gy, 0, numAtoms * sizeof(double), stream));
+    checkGPUError(cudaMemsetAsync(d_gz, 0, numAtoms * sizeof(double), stream));
   }
-  double* getDeviceX() const { return d_fx; }
-  double* getDeviceY() const { return d_fy; }
-  double* getDeviceZ() const { return d_fz; }
-  AtomGroupForces toHost() const {
-    AtomGroupForces result;
-    result.fx.resize(numAtoms);
-    result.fy.resize(numAtoms);
-    result.fz.resize(numAtoms);
+  double* getDeviceX() const { return d_gx; }
+  double* getDeviceY() const { return d_gy; }
+  double* getDeviceZ() const { return d_gz; }
+  AtomGroupGradients toHost() const {
+    AtomGroupGradients result;
+    result.gx.resize(numAtoms);
+    result.gy.resize(numAtoms);
+    result.gz.resize(numAtoms);
     const size_t copySize = numAtoms * sizeof(double);
-    checkGPUError(cudaMemcpyAsync(result.fx.data(), d_fx, copySize, cudaMemcpyDeviceToHost, stream));
-    checkGPUError(cudaMemcpyAsync(result.fy.data(), d_fy, copySize, cudaMemcpyDeviceToHost, stream));
-    checkGPUError(cudaMemcpyAsync(result.fz.data(), d_fz, copySize, cudaMemcpyDeviceToHost, stream));
+    checkGPUError(cudaMemcpyAsync(result.gx.data(), d_gx, copySize, cudaMemcpyDeviceToHost, stream));
+    checkGPUError(cudaMemcpyAsync(result.gy.data(), d_gy, copySize, cudaMemcpyDeviceToHost, stream));
+    checkGPUError(cudaMemcpyAsync(result.gz.data(), d_gz, copySize, cudaMemcpyDeviceToHost, stream));
     return result;
   }
 };
@@ -127,12 +119,13 @@ AtomGroupPositions generateRandomAtomGroupPositions(int seed, size_t numAtoms,
                                                     double yMin, double yMax, 
                                                     double zMin, double zMax);
 
-void computeCoordinationNumber(const AtomGroupPositions& pos1, 
-                               const AtomGroupPositions& pos2,
-                               double inv_r0,
-                               double& energy, 
-                               AtomGroupForces& forces1, 
-                               AtomGroupForces& forces2);
+void computeCoordinationNumberTwoGroups(
+  const AtomGroupPositions& pos1,
+  const AtomGroupPositions& pos2,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& forces1,
+  AtomGroupGradients& forces2);
 
 inline __host__ __device__ double integer_power(double const& x, int const n) {
   double yy, ww;
@@ -169,8 +162,8 @@ inline void __host__ __device__ coordnum(
   double inv_r0_y,
   double inv_r0_z,
   double& energy,
-  double& fx1, double& fy1, double& fz1,
-  double& fx2, double& fy2, double& fz2) {
+  double& gx1, double& gy1, double& gz1,
+  double& gx2, double& gy2, double& gz2) {
   const double dx = (x2 - x1) * inv_r0_x;
   const double dy = (y2 - y1) * inv_r0_y;
   const double dz = (z2 - z1) * inv_r0_z;
@@ -189,12 +182,12 @@ inline void __host__ __device__ coordnum(
     const double dr2_dx = 2.0 * dx * inv_r0_x;
     const double dr2_dy = 2.0 * dy * inv_r0_y;
     const double dr2_dz = 2.0 * dz * inv_r0_z;
-    fx1 += dfunc_dr2 * dr2_dx;
-    fy1 += dfunc_dr2 * dr2_dy;
-    fz1 += dfunc_dr2 * dr2_dz;
-    fx2 += -dfunc_dr2 * dr2_dx;
-    fy2 += -dfunc_dr2 * dr2_dy;
-    fz2 += -dfunc_dr2 * dr2_dz;
+    gx1 += dfunc_dr2 * dr2_dx;
+    gy1 += dfunc_dr2 * dr2_dy;
+    gz1 += dfunc_dr2 * dr2_dz;
+    gx2 += -dfunc_dr2 * dr2_dx;
+    gy2 += -dfunc_dr2 * dr2_dy;
+    gz2 += -dfunc_dr2 * dr2_dz;
   }
 }
 

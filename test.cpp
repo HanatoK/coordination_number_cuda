@@ -5,8 +5,8 @@
 #include "gpu_kernel.h"
 
 struct calculationResult {
-  AtomGroupForces forces1;
-  AtomGroupForces forces2;
+  AtomGroupGradients gradients1;
+  AtomGroupGradients gradients2;
   double energy;
 };
 
@@ -87,31 +87,31 @@ calculationResult testCoordinationNumber(const AtomGroupPositions& pos1, const A
   const size_t group1_size = pos1.x.size();
   const size_t group2_size = pos2.x.size();
 
-  AtomGroupForces forces1;
-  forces1.fx.resize(group1_size, 0.0);
-  forces1.fy.resize(group1_size, 0.0);
-  forces1.fz.resize(group1_size, 0.0);
+  AtomGroupGradients gradients1;
+  gradients1.gx.resize(group1_size, 0.0);
+  gradients1.gy.resize(group1_size, 0.0);
+  gradients1.gz.resize(group1_size, 0.0);
 
-  AtomGroupForces forces2;
-  forces2.fx.resize(group2_size, 0.0);
-  forces2.fy.resize(group2_size, 0.0);
-  forces2.fz.resize(group2_size, 0.0);
+  AtomGroupGradients gradients2;
+  gradients2.gx.resize(group2_size, 0.0);
+  gradients2.gy.resize(group2_size, 0.0);
+  gradients2.gz.resize(group2_size, 0.0);
   
   double energy = 0.0;
 
   const auto start = std::chrono::high_resolution_clock::now();
-  computeCoordinationNumber(pos1, pos2, 1.0 / cutoffDistance, energy, forces1, forces2);
+  computeCoordinationNumberTwoGroups(pos1, pos2, 1.0 / cutoffDistance, energy, gradients1, gradients2);
   const auto end = std::chrono::high_resolution_clock::now();
   const std::chrono::duration<double, std::milli> fp_ms = end - start;
   
   std::cout << fmt::format("Coordination number: {:15.7e}, time (CPU) = {:10.5f} ms\n", energy, fp_ms.count());
 
-  // Save positions and forces to files for further analysis if needed
+  // Save positions and gradients to files for further analysis if needed
   // writeToFile(pos1.x, pos1.y, pos1.z, "positions1.txt");
   // writeToFile(pos2.x, pos2.y, pos2.z, "positions2.txt");
-  // writeToFile(forces1.fx, forces1.fy, forces1.fz, "gradients1.txt");
-  // writeToFile(forces2.fx, forces2.fy, forces2.fz, "gradients2.txt");
-  return calculationResult{forces1, forces2, energy};
+  // writeToFile(gradients1.fx, gradients1.fy, gradients1.fz, "gradients1.txt");
+  // writeToFile(gradients2.fx, gradients2.fy, gradients2.fz, "gradients2.txt");
+  return calculationResult{gradients1, gradients2, energy};
 }
 
 calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, const AtomGroupPositions& pos2, double cutoffDistance) {
@@ -119,10 +119,10 @@ calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, con
   checkGPUError(cudaStreamCreate(&stream));
   AtomGroupPositionsCUDA cudaPos1(pos1, stream);
   AtomGroupPositionsCUDA cudaPos2(pos2, stream);
-  AtomGroupForcesCUDA cudaForce1;
-  AtomGroupForcesCUDA cudaForce2;
-  cudaForce1.initialize(cudaPos1.getNumAtoms(), stream);
-  cudaForce2.initialize(cudaPos2.getNumAtoms(), stream);
+  AtomGroupGradientsCUDA cudaGradient1;
+  AtomGroupGradientsCUDA cudaGradient2;
+  cudaGradient1.initialize(cudaPos1.getNumAtoms(), stream);
+  cudaGradient2.initialize(cudaPos2.getNumAtoms(), stream);
   double* d_energy;
   checkGPUError(cudaMalloc(&d_energy, sizeof(double)));
   checkGPUError(cudaMemset(d_energy, 0, sizeof(double)));
@@ -130,17 +130,14 @@ calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, con
   checkGPUError(cudaMallocHost(&h_energy, sizeof(double)));
   cudaGraph_t graph;
   checkGPUError(cudaGraphCreate(&graph, 0));
-  computeCoordinationNumberCUDA(
-    cudaPos1, cudaPos2, cudaForce1, cudaForce2,
+  computeCoordinationNumberTwoGroupsCUDA(
+    cudaPos1, cudaPos2, cudaGradient1, cudaGradient2,
     1.0 / cutoffDistance, d_energy, graph, stream);
   cudaGraphExec_t graph_exec;
   checkGPUError(cudaGraphInstantiate(&graph_exec, graph));
   checkGPUError(cudaStreamSynchronize(stream));
 
   const auto start = std::chrono::high_resolution_clock::now();
-  // computeCoordinationNumberCUDA(
-  //   cudaPos1, cudaPos2, cudaForce1, cudaForce2,
-  //   1.0 / cutoffDistance, d_energy, stream);
   checkGPUError(cudaGraphLaunch(graph_exec, stream));
   checkGPUError(cudaStreamSynchronize(stream));
   const auto end = std::chrono::high_resolution_clock::now();
@@ -151,15 +148,15 @@ calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, con
 
   std::cout << fmt::format("Coordination number: {:15.7e}, time (GPU) = {:10.5f} ms\n", *h_energy, fp_ms.count());
   const double energy = *h_energy;
-  const auto hostForce1 = cudaForce1.toHost();
-  const auto hostForce2 = cudaForce2.toHost();
-  // writeToFile(hostForce1.fx,
-  //             hostForce1.fy,
-  //             hostForce1.fz,
+  const auto hostGradient1 = cudaGradient1.toHost();
+  const auto hostGradient2 = cudaGradient2.toHost();
+  // writeToFile(hostGradient1.fx,
+  //             hostGradient1.fy,
+  //             hostGradient1.fz,
   //             "gradients1_cuda.txt");
-  // writeToFile(hostForce2.fx,
-  //             hostForce2.fy,
-  //             hostForce2.fz,
+  // writeToFile(hostGradient2.fx,
+  //             hostGradient2.fy,
+  //             hostGradient2.fz,
   //             "gradients2_cuda.txt");
 
   checkGPUError(cudaFree(d_energy));
@@ -167,46 +164,46 @@ calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, con
   checkGPUError(cudaGraphExecDestroy(graph_exec));
   checkGPUError(cudaGraphDestroy(graph));
   checkGPUError(cudaStreamDestroy(stream));
-  return calculationResult{hostForce1, hostForce2, energy};
+  return calculationResult{hostGradient1, hostGradient2, energy};
 }
 
 void compareResults(const calculationResult& cpuResult, const calculationResult& cudaResult) {
-  double maxRelErrorForces1x = 0;
-  double maxRelErrorForces1y = 0;
-  double maxRelErrorForces1z = 0;
-  const size_t numForces1 = cpuResult.forces1.fx.size();
-  for (size_t i = 0; i < numForces1; ++i) {
-    const double diff_x = std::abs(cpuResult.forces1.fx[i] - cudaResult.forces1.fx[i]) / std::abs(cpuResult.forces1.fx[i]);
-    const double diff_y = std::abs(cpuResult.forces1.fy[i] - cudaResult.forces1.fy[i]) / std::abs(cpuResult.forces1.fy[i]);
-    const double diff_z = std::abs(cpuResult.forces1.fz[i] - cudaResult.forces1.fz[i]) / std::abs(cpuResult.forces1.fz[i]);
-    maxRelErrorForces1x = std::max(diff_x, maxRelErrorForces1x);
-    maxRelErrorForces1y = std::max(diff_y, maxRelErrorForces1y);
-    maxRelErrorForces1z = std::max(diff_z, maxRelErrorForces1z);
+  double maxRelErrorGradients1x = 0;
+  double maxRelErrorGradients1y = 0;
+  double maxRelErrorGradients1z = 0;
+  const size_t numGrads1 = cpuResult.gradients1.gx.size();
+  for (size_t i = 0; i < numGrads1; ++i) {
+    const double diff_x = std::abs(cpuResult.gradients1.gx[i] - cudaResult.gradients1.gx[i]) / std::abs(cpuResult.gradients1.gx[i]);
+    const double diff_y = std::abs(cpuResult.gradients1.gy[i] - cudaResult.gradients1.gy[i]) / std::abs(cpuResult.gradients1.gy[i]);
+    const double diff_z = std::abs(cpuResult.gradients1.gz[i] - cudaResult.gradients1.gz[i]) / std::abs(cpuResult.gradients1.gz[i]);
+    maxRelErrorGradients1x = std::max(diff_x, maxRelErrorGradients1x);
+    maxRelErrorGradients1y = std::max(diff_y, maxRelErrorGradients1y);
+    maxRelErrorGradients1z = std::max(diff_z, maxRelErrorGradients1z);
   }
   std::cout << fmt::format("Max relative error of gradients of group1: {:15.7e} {:15.7e} {:15.7e}\n",
-                           maxRelErrorForces1x, maxRelErrorForces1y, maxRelErrorForces1z);
+                           maxRelErrorGradients1x, maxRelErrorGradients1y, maxRelErrorGradients1z);
 
-  double maxRelErrorForces2x = 0;
-  double maxRelErrorForces2y = 0;
-  double maxRelErrorForces2z = 0;
-  const size_t numForces2 = cpuResult.forces2.fx.size();
-  for (size_t i = 0; i < numForces2; ++i) {
-    const double diff_x = std::abs(cpuResult.forces2.fx[i] - cudaResult.forces2.fx[i]) / std::abs(cpuResult.forces2.fx[i]);
-    const double diff_y = std::abs(cpuResult.forces2.fy[i] - cudaResult.forces2.fy[i]) / std::abs(cpuResult.forces2.fy[i]);
-    const double diff_z = std::abs(cpuResult.forces2.fz[i] - cudaResult.forces2.fz[i]) / std::abs(cpuResult.forces2.fz[i]);
-    maxRelErrorForces2x = std::max(diff_x, maxRelErrorForces2x);
-    maxRelErrorForces2y = std::max(diff_y, maxRelErrorForces2y);
-    maxRelErrorForces2z = std::max(diff_z, maxRelErrorForces2z);
+  double maxRelErrorGradients2x = 0;
+  double maxRelErrorGradients2y = 0;
+  double maxRelErrorGradients2z = 0;
+  const size_t numGrads2 = cpuResult.gradients2.gx.size();
+  for (size_t i = 0; i < numGrads2; ++i) {
+    const double diff_x = std::abs(cpuResult.gradients2.gx[i] - cudaResult.gradients2.gx[i]) / std::abs(cpuResult.gradients2.gx[i]);
+    const double diff_y = std::abs(cpuResult.gradients2.gy[i] - cudaResult.gradients2.gy[i]) / std::abs(cpuResult.gradients2.gy[i]);
+    const double diff_z = std::abs(cpuResult.gradients2.gz[i] - cudaResult.gradients2.gz[i]) / std::abs(cpuResult.gradients2.gz[i]);
+    maxRelErrorGradients2x = std::max(diff_x, maxRelErrorGradients2x);
+    maxRelErrorGradients2y = std::max(diff_y, maxRelErrorGradients2y);
+    maxRelErrorGradients2z = std::max(diff_z, maxRelErrorGradients2z);
   }
   std::cout << fmt::format("Max relative error of gradients of group2: {:15.7e} {:15.7e} {:15.7e}\n",
-                           maxRelErrorForces2x, maxRelErrorForces2y, maxRelErrorForces2z);
+                           maxRelErrorGradients2x, maxRelErrorGradients2y, maxRelErrorGradients2z);
 
   const double relErrorE = std::abs(cpuResult.energy - cudaResult.energy) / std::abs(cpuResult.energy);
   std::cout << fmt::format("Relative error of coordination number: {:15.7e}\n", relErrorE);
 }
 
 int main(int argc, char* argv[]) {
-  testNumericalGradient();
+  // testNumericalGradient();
   unsigned int group1_size = 10000;
   unsigned int group2_size = 2005;
   if (argc > 1) group1_size = std::stoull(argv[1]);
