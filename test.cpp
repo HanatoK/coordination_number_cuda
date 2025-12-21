@@ -203,7 +203,7 @@ void compareResults(const calculationResult& cpuResult, const calculationResult&
 }
 
 int main(int argc, char* argv[]) {
-  // testNumericalGradient();
+  testNumericalGradient();
   unsigned int group1_size = 10000;
   unsigned int group2_size = 2005;
   if (argc > 1) group1_size = std::stoull(argv[1]);
