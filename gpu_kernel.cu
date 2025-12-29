@@ -1,5 +1,8 @@
 #include "gpu_kernel.h"
 #include <iostream>
+#include <string>
+#include <iomanip>
+#include <sstream>
 #if defined(USE_CUDA)
 #include <cub/block/block_reduce.cuh>
 #include <cuda_pipeline.h>
@@ -204,7 +207,13 @@ void computeCoordinationNumberTwoGroupsCUDA(
   checkGPUError(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, deviceID));
   cudaDeviceProp props = {0};
   checkGPUError(cudaGetDeviceProperties(&props, deviceID));
-  std::cout << "GPU: " << props.name << std::endl;
+  char busID[256];
+  checkGPUError(cudaDeviceGetPCIBusId(busID, 256, deviceID));
+  std::cout << "GPU Name: " << props.name << ", PCI Bus ID: " << busID;
+#if defined(USE_HIP)
+  std::cout << ", GCN Arch Name: " << props.gcnArchName;
+#endif
+  std::cout << std::endl;
   // From CUDA samples
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
   const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + block_size - 1) / block_size);

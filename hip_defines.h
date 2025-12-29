@@ -133,6 +133,10 @@
 #define cudaDeviceProp hipDeviceProp_t
 #endif
 
+#ifndef cudaDeviceGetPCIBusId
+#define cudaDeviceGetPCIBusId hipDeviceGetPCIBusId
+#endif
+
 #endif // USE_HIP
 
 #endif // HIP_DEFINES_H
