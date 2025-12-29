@@ -1,7 +1,11 @@
 #include "gpu_kernel.h"
-// #include <iostream>
+#include <iostream>
+#if defined(USE_CUDA)
 #include <cub/block/block_reduce.cuh>
 #include <cuda_pipeline.h>
+#elif defined(USE_HIP)
+#include <hipcub/block/block_reduce.hpp>
+#endif
 
 template <int N, int M, int block_size, int group2BatchSize, int numGroup2BatchesPerBlock>
 __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
@@ -51,17 +55,25 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
       if (group2BatchID == 0) {
         const bool mask_j = j < numAtoms2;
         if (mask_j) {
+#if defined(USE_CUDA)
           __pipeline_memcpy_async(&shPosition[group2LaneID].x, &pos2x[j], sizeof(double));
           __pipeline_memcpy_async(&shPosition[group2LaneID].y, &pos2y[j], sizeof(double));
           __pipeline_memcpy_async(&shPosition[group2LaneID].z, &pos2z[j], sizeof(double));
           __pipeline_commit();
+#elif defined(USE_HIP)
+          shPosition[group2LaneID].x = pos2x[j];
+          shPosition[group2LaneID].y = pos2y[j];
+          shPosition[group2LaneID].z = pos2z[j];
+#endif
         }
         shJMask[group2LaneID] = mask_j;
       }
       shJGrad[group2BatchID][group2LaneID].x = 0;
       shJGrad[group2BatchID][group2LaneID].y = 0;
       shJGrad[group2BatchID][group2LaneID].z = 0;
+#if defined(USE_CUDA)
       __pipeline_wait_prior(0);
+#endif
       __syncthreads();
       for (unsigned int t = 0; t < group2BatchSize; ++t) {
         // Since we need to store the interaction gradient into the
@@ -114,7 +126,11 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   }
   // Reduction for energy
   __syncthreads();
+#if defined(USE_CUDA)
   typedef cub::BlockReduce<double, block_size> BlockReduce;
+#elif defined(USE_HIP)
+  typedef hipcub::BlockReduce<double, block_size> BlockReduce;
+#endif
   __shared__ typename BlockReduce::TempStorage temp_storage;
   const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
   if (threadIdx.x == 0) {
@@ -186,6 +202,9 @@ void computeCoordinationNumberTwoGroupsCUDA(
   checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks_occ, kernelNodeParams.func, block_size, 0));
   checkGPUError(cudaGetDevice(&deviceID));
   checkGPUError(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, deviceID));
+  cudaDeviceProp props = {0};
+  checkGPUError(cudaGetDeviceProperties(&props, deviceID));
+  std::cout << "GPU: " << props.name << std::endl;
   // From CUDA samples
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
   const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + block_size - 1) / block_size);

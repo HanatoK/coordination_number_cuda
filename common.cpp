@@ -1,6 +1,7 @@
 #include "common.h"
 #include <fmt/format.h>
 #include <fstream>
+#include <iostream>
 
 AtomGroupPositions generateRandomAtomGroupPositions(int seed, size_t numAtoms, 
                                                      double xMin, double xMax, 
@@ -73,6 +74,7 @@ int gpuAssert(cudaError_t code, const char *file, int line)
     std::string error =
       std::string("GPUassert: ") +
       cudaGetErrorString(code) + " " + file + ", line " + std::to_string(line);
+    std::cerr << error << std::endl;
     throw(error);
     // return cvm::error(error, COLVARS_ERROR);
   }

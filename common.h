@@ -2,7 +2,13 @@
 #include <vector>
 #include <random>
 #include <cmath>
+
+#if defined(USE_CUDA)
 #include <cuda_runtime.h>
+#elif defined(USE_HIP)
+#include <hip/hip_runtime.h>
+#include "hip_defines.h"
+#endif
 
 #ifndef COMMON_H
 #define COMMON_H

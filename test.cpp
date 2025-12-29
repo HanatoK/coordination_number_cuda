@@ -127,14 +127,18 @@ calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, con
   checkGPUError(cudaMalloc(&d_energy, sizeof(double)));
   checkGPUError(cudaMemset(d_energy, 0, sizeof(double)));
   double* h_energy;
-  checkGPUError(cudaMallocHost(&h_energy, sizeof(double)));
+  checkGPUError(cudaMallocHost((void**)&h_energy, sizeof(double)));
   cudaGraph_t graph;
   checkGPUError(cudaGraphCreate(&graph, 0));
   computeCoordinationNumberTwoGroupsCUDA(
     cudaPos1, cudaPos2, cudaGradient1, cudaGradient2,
     1.0 / cutoffDistance, d_energy, graph, stream);
   cudaGraphExec_t graph_exec;
+#if defined(USE_CUDA)
   checkGPUError(cudaGraphInstantiate(&graph_exec, graph));
+#elif defined(USE_HIP)
+  checkGPUError(hipGraphInstantiate(&graph_exec, graph, NULL, NULL, 0));
+#endif
   checkGPUError(cudaStreamSynchronize(stream));
 
   const auto start = std::chrono::high_resolution_clock::now();
