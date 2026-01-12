@@ -130,8 +130,14 @@ void computeCoordinationNumberTwoGroups(
   const AtomGroupPositions& pos2,
   double inv_r0,
   double& energy,
-  AtomGroupGradients& forces1,
-  AtomGroupGradients& forces2);
+  AtomGroupGradients& gradients1,
+  AtomGroupGradients& gradients2);
+
+void computeCoordinationNumberSelfGroup(
+  const AtomGroupPositions& pos1,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& gradients1);
 
 inline __host__ __device__ double integer_power(double const& x, int const n) {
   double yy, ww;

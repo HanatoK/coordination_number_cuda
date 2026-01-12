@@ -3,6 +3,9 @@
 #include <string>
 #include <iomanip>
 #include <sstream>
+#include <vector>
+#include <algorithm>
+#include <numeric>
 #if defined(USE_CUDA)
 #include <cub/block/block_reduce.cuh>
 #include <cuda_pipeline.h>
@@ -219,6 +222,233 @@ void computeCoordinationNumberTwoGroupsCUDA(
   const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + block_size - 1) / block_size);
   kernelNodeParams.gridDim        = dim3(num_blocks, 1, 1);
 
+  cudaGraphNode_t node;
+  checkGPUError(cudaGraphAddKernelNode(
+    &node, graph, NULL,
+    0, &kernelNodeParams));
+}
+
+computeCoordinationNumberSelfGroupCUDAObject::~computeCoordinationNumberSelfGroupCUDAObject() {
+  if (d_tilesList) {
+    cudaFree(d_tilesList);
+    d_tilesList = nullptr;
+  }
+  if (d_tilesListStart) {
+    cudaFree(d_tilesListStart);
+    d_tilesListStart = nullptr;
+  }
+  if (d_tilesListSizes) {
+    cudaFree(d_tilesListSizes);
+    d_tilesListSizes = nullptr;
+  }
+}
+
+void computeCoordinationNumberSelfGroupCUDAObject::initialize(unsigned int numAtoms) {
+  if (initialized) {
+    if (d_tilesList) cudaFree(d_tilesList);
+    if (d_tilesListSizes) cudaFree(d_tilesListSizes);
+    if (d_tilesListStart) cudaFree(d_tilesListStart);
+  }
+  prepareTilesList(numAtoms);
+  initialized = true;
+}
+
+void computeCoordinationNumberSelfGroupCUDAObject::prepareTilesList(unsigned int numAtoms) {
+  const unsigned int blockSize = self_group_block_size;
+  const unsigned int numTiles = (numAtoms + blockSize - 1) / blockSize;
+  std::vector<std::vector<unsigned int>> tilesList(numTiles);
+  const unsigned int tileSize = numTiles / 2;
+  for (unsigned int i = 0; i < numTiles - 1; ++i) {
+    for (unsigned int j = i + 1; j < numTiles; ++j) {
+      if (tilesList[i].size() < tileSize) {
+        tilesList[i].push_back(j);
+      } else {
+        tilesList[j].push_back(i);
+      }
+    }
+  }
+  // Flattened list
+  std::vector<unsigned int> tilesListFlattened;
+  for (const auto& list: tilesList) {
+    tilesListFlattened.insert(tilesListFlattened.end(), list.begin(), list.end());
+  }
+  // The size of each tile list
+  std::vector<unsigned int> tilesListSizes(tilesList.size());
+  std::transform(
+    tilesList.begin(), tilesList.end(), tilesListSizes.begin(),
+    [](const auto& tile){return tile.size();});
+  // The start index of each tile list
+  std::vector<unsigned int> tilesListStart(tilesList.size(), 0);
+  std::exclusive_scan(tilesListSizes.begin(), tilesListSizes.end(), tilesListStart.begin(), (unsigned int)0);
+  // Copy the data to GPU
+  checkGPUError(cudaMalloc(&d_tilesList, tilesListFlattened.size() * sizeof(unsigned int)));
+  checkGPUError(cudaMemcpy(d_tilesList, tilesListFlattened.data(), tilesListFlattened.size() * sizeof(unsigned int), cudaMemcpyHostToDevice));
+  checkGPUError(cudaMalloc(&d_tilesListSizes, tilesListSizes.size() * sizeof(unsigned int)));
+  checkGPUError(cudaMemcpy(d_tilesListSizes, tilesListSizes.data(), tilesListSizes.size() * sizeof(unsigned int), cudaMemcpyHostToDevice));
+  checkGPUError(cudaMalloc(&d_tilesListStart, tilesListStart.size() * sizeof(unsigned int)));
+  checkGPUError(cudaMemcpy(d_tilesListStart, tilesListStart.data(), tilesListStart.size() * sizeof(unsigned int), cudaMemcpyHostToDevice));
+}
+
+template <unsigned int N, unsigned int M, unsigned int block_size>
+__global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
+  const double* __restrict pos1x,
+  const double* __restrict pos1y,
+  const double* __restrict pos1z,
+  const unsigned int numAtoms1,
+  const double inv_r0,
+  double* __restrict energy,
+  double* __restrict gx1,
+  double* __restrict gy1,
+  double* __restrict gz1,
+  const unsigned int* tilesList,
+  const unsigned int* tilesListStart,
+  const unsigned int* tilesListSizes) {
+  __shared__ double3 shPosition[block_size];
+  __shared__ double3 shJGrad[block_size];
+  __shared__ bool mask[block_size];
+  double ei = 0;
+  // Number of blocks required to iterate over group1
+  const unsigned int numBlocksInGroup1 = (numAtoms1 + block_size - 1) / block_size;
+  for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
+    const unsigned int tid = i * blockDim.x + threadIdx.x;
+    const bool mask_i = tid < numAtoms1;
+    const double x1 = mask_i ? pos1x[tid] : 0;
+    const double y1 = mask_i ? pos1y[tid] : 0;
+    const double z1 = mask_i ? pos1z[tid] : 0;
+    double3 iGrad{0, 0, 0};
+    // Self tile
+    mask[threadIdx.x] = mask_i;
+    shPosition[threadIdx.x].x = x1;
+    shPosition[threadIdx.x].y = y1;
+    shPosition[threadIdx.x].z = z1;
+    shJGrad[threadIdx.x].x = 0;
+    shJGrad[threadIdx.x].y = 0;
+    shJGrad[threadIdx.x].z = 0;
+    __syncthreads();
+    for (unsigned int t = 0; t < block_size; ++t) {
+      const unsigned int jid = t ^ threadIdx.x;
+      if (jid > threadIdx.x) {
+        if (mask_i && mask[jid]) {
+          const double x2 = shPosition[jid].x;
+          const double y2 = shPosition[jid].y;
+          const double z2 = shPosition[jid].z;
+          // printf("(GPU) x1 = %lf, x2 = %lf\n", x1, x2);
+          coordnum<N, M>(
+            x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
+            iGrad.x, iGrad.y, iGrad.z,
+            shJGrad[jid].x,
+            shJGrad[jid].y,
+            shJGrad[jid].z);
+        }
+      }
+      __syncthreads();
+    }
+    if (mask_i) {
+      atomicAdd(&gx1[tid], shJGrad[threadIdx.x].x);
+      atomicAdd(&gy1[tid], shJGrad[threadIdx.x].y);
+      atomicAdd(&gz1[tid], shJGrad[threadIdx.x].z);
+    }
+    __syncthreads();
+
+    // Iterate over other tiles
+    const unsigned int jBlockStart = tilesListStart[i];
+    const unsigned int numJBlocks = tilesListSizes[i];
+    const unsigned int jBlockEnd = jBlockStart + numJBlocks;
+    for (unsigned int l = jBlockStart; l < jBlockEnd; ++l) {
+      const unsigned int jBlockIndex = tilesList[l];
+      // Fetch atom j from i-tile
+      const unsigned int jid = jBlockIndex * blockDim.x + threadIdx.x;
+      const bool mask_j = jid < numAtoms1;
+      if (mask_j) {
+        shPosition[threadIdx.x].x = pos1x[jid];
+        shPosition[threadIdx.x].y = pos1y[jid];
+        shPosition[threadIdx.x].z = pos1z[jid];
+      }
+      mask[threadIdx.x] = mask_j;
+      // Reset the gradients
+      shJGrad[threadIdx.x].x = 0;
+      shJGrad[threadIdx.x].y = 0;
+      shJGrad[threadIdx.x].z = 0;
+      __syncthreads();
+      for (unsigned int t = 0; t < block_size; ++t) {
+        const unsigned int jid = t ^ threadIdx.x;
+        if (mask_i && mask[jid]) {
+          const double x2 = shPosition[jid].x;
+          const double y2 = shPosition[jid].y;
+          const double z2 = shPosition[jid].z;
+          coordnum<N, M>(
+            x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
+            iGrad.x, iGrad.y, iGrad.z,
+            shJGrad[jid].x,
+            shJGrad[jid].y,
+            shJGrad[jid].z);
+        }
+        __syncthreads();
+      }
+      if (mask_j) {
+        atomicAdd(&gx1[jid], shJGrad[threadIdx.x].x);
+        atomicAdd(&gy1[jid], shJGrad[threadIdx.x].y);
+        atomicAdd(&gz1[jid], shJGrad[threadIdx.x].z);
+      }
+    }
+    if (mask_i) {
+      atomicAdd(&gx1[tid], iGrad.x);
+      atomicAdd(&gy1[tid], iGrad.y);
+      atomicAdd(&gz1[tid], iGrad.z);
+    }
+  }
+  // Reduction for energy
+#if defined(USE_CUDA)
+  typedef cub::BlockReduce<double, block_size> BlockReduce;
+#elif defined(USE_HIP)
+  typedef hipcub::BlockReduce<double, block_size> BlockReduce;
+#endif
+  __shared__ typename BlockReduce::TempStorage temp_storage;
+  const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
+  if (threadIdx.x == 0) {
+    atomicAdd(energy, total_e);
+  }
+}
+
+void computeCoordinationNumberSelfGroupCUDAObject::computeCoordinationNumberSelfGroupCUDA(
+  const AtomGroupPositionsCUDA& group1,
+  AtomGroupGradientsCUDA& gradient1,
+  double inv_r0,
+  double* d_energy,
+  cudaGraph_t& graph,
+  cudaStream_t stream) {
+  unsigned int numAtoms1 = group1.getNumAtoms();
+  if (numAtoms1 < 2) return;
+  const double* pos1x = group1.getDeviceX();
+  const double* pos1y = group1.getDeviceY();
+  const double* pos1z = group1.getDeviceZ();
+  double* g1x = gradient1.getDeviceX();
+  double* g1y = gradient1.getDeviceY();
+  double* g1z = gradient1.getDeviceZ();
+  void* args[] = {
+    &pos1x, &pos1y, &pos1z,
+    &numAtoms1,
+    &inv_r0, &d_energy,
+    &g1x, &g1y, &g1z,
+    &d_tilesList,
+    &d_tilesListStart,
+    &d_tilesListSizes};
+  cudaKernelNodeParams kernelNodeParams = {0};
+  kernelNodeParams.blockDim       = dim3(self_group_block_size, 1, 1);
+  kernelNodeParams.sharedMemBytes = 0;
+  kernelNodeParams.kernelParams   = args;
+  kernelNodeParams.extra          = NULL;
+  kernelNodeParams.func           =
+    (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, self_group_block_size>;
+  int deviceID = 0;
+  int num_blocks_occ;
+  int multiProcessorCount;
+  checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks_occ, kernelNodeParams.func, self_group_block_size, 0));
+  checkGPUError(cudaGetDevice(&deviceID));
+  checkGPUError(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, deviceID));
+  const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
+  const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + self_group_block_size - 1) / self_group_block_size);
+  kernelNodeParams.gridDim        = dim3(num_blocks, 1, 1);
   cudaGraphNode_t node;
   checkGPUError(cudaGraphAddKernelNode(
     &node, graph, NULL,

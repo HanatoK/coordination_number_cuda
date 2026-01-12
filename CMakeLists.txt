@@ -15,6 +15,7 @@ if(NOT DEFINED CMAKE_CUDA_STANDARD)
 endif()
 
 find_package(fmt REQUIRED)
+find_package(CLI11 REQUIRED)
 
 if(USE_CUDA)
   find_package(CUDAToolkit REQUIRED)

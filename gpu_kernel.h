@@ -6,11 +6,33 @@
 void computeCoordinationNumberTwoGroupsCUDA(
   const AtomGroupPositionsCUDA& group1,
   const AtomGroupPositionsCUDA& group2,
-  AtomGroupGradientsCUDA& force1,
-  AtomGroupGradientsCUDA& force2,
+  AtomGroupGradientsCUDA& gradient1,
+  AtomGroupGradientsCUDA& gradient2,
   double inv_r0,
   double* d_energy,
   cudaGraph_t& graph,
   cudaStream_t stream);
+
+class computeCoordinationNumberSelfGroupCUDAObject {
+public:
+  computeCoordinationNumberSelfGroupCUDAObject() {}
+  ~computeCoordinationNumberSelfGroupCUDAObject();
+  void initialize(unsigned int numAtoms);
+  void computeCoordinationNumberSelfGroupCUDA(
+    const AtomGroupPositionsCUDA& group1,
+    AtomGroupGradientsCUDA& gradient1,
+    double inv_r0,
+    double* d_energy,
+    cudaGraph_t& graph,
+    cudaStream_t stream);
+private:
+  void prepareTilesList(unsigned int numAtoms);
+private:
+  static constexpr const unsigned int self_group_block_size = 32;
+  unsigned int* d_tilesList = nullptr;
+  unsigned int* d_tilesListStart = nullptr;
+  unsigned int* d_tilesListSizes = nullptr;
+  bool initialized = false;
+};
 
 #endif // GPU_KERNEL_H
