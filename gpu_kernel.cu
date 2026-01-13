@@ -307,6 +307,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   __shared__ double3 shJGrad[block_size];
   __shared__ bool mask[block_size];
   double ei = 0;
+  static constexpr const unsigned int half_block_size = block_size / 2;
   // Number of blocks required to iterate over group1
   const unsigned int numBlocksInGroup1 = (numAtoms1 + block_size - 1) / block_size;
   for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
@@ -325,24 +326,43 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
     shJGrad[threadIdx.x].y = 0;
     shJGrad[threadIdx.x].z = 0;
     __syncthreads();
-    for (unsigned int t = 0; t < block_size; ++t) {
-      const unsigned int jid = t ^ threadIdx.x;
-      if (jid > threadIdx.x) {
+    for (unsigned int t = 1; t < half_block_size; ++t) {
+      // NAMD/OpenMM style swizzling
+      const unsigned int jid = (t + threadIdx.x) & (block_size - 1);
+      if (mask_i && mask[jid]) {
+        const double x2 = shPosition[jid].x;
+        const double y2 = shPosition[jid].y;
+        const double z2 = shPosition[jid].z;
+        coordnum<N, M>(
+          x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
+          iGrad.x, iGrad.y, iGrad.z,
+          shJGrad[jid].x,
+          shJGrad[jid].y,
+          shJGrad[jid].z);
+      }
+      __syncthreads();
+    }
+
+    // Last loop: t == block_size / 2
+    {
+      // NAMD/OpenMM style swizzling
+      const unsigned int jid = (half_block_size + threadIdx.x) & (block_size - 1);
+      if (jid < threadIdx.x) {
         if (mask_i && mask[jid]) {
-          const double x2 = shPosition[jid].x;
-          const double y2 = shPosition[jid].y;
-          const double z2 = shPosition[jid].z;
-          // printf("(GPU) x1 = %lf, x2 = %lf\n", x1, x2);
-          coordnum<N, M>(
-            x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
-            iGrad.x, iGrad.y, iGrad.z,
-            shJGrad[jid].x,
-            shJGrad[jid].y,
-            shJGrad[jid].z);
+        const double x2 = shPosition[jid].x;
+        const double y2 = shPosition[jid].y;
+        const double z2 = shPosition[jid].z;
+        coordnum<N, M>(
+          x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
+          iGrad.x, iGrad.y, iGrad.z,
+          shJGrad[jid].x,
+          shJGrad[jid].y,
+          shJGrad[jid].z);
         }
       }
       __syncthreads();
     }
+
     if (mask_i) {
       atomicAdd(&gx1[tid], shJGrad[threadIdx.x].x);
       atomicAdd(&gy1[tid], shJGrad[threadIdx.x].y);
