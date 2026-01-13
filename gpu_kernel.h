@@ -33,6 +33,7 @@ private:
   unsigned int* d_tilesListStart = nullptr;
   unsigned int* d_tilesListSizes = nullptr;
   bool initialized = false;
+  bool* d_pairlist = nullptr;
 };
 
 #endif // GPU_KERNEL_H
