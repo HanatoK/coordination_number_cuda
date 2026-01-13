@@ -85,6 +85,10 @@
 #define cudaMallocHost hipMallocHost
 #endif
 
+#ifndef cudaMemcpy
+#define cudaMemcpy hipMemcpy
+#endif
+
 #ifndef cudaMemcpyAsync
 #define cudaMemcpyAsync hipMemcpyAsync
 #endif
