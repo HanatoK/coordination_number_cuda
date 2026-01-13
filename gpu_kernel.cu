@@ -308,11 +308,11 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   double* __restrict gx1,
   double* __restrict gy1,
   double* __restrict gz1,
-  const unsigned int* tilesList,
-  const unsigned int* tilesListStart,
-  const unsigned int* tilesListSizes,
+  const unsigned int* __restrict tilesList,
+  const unsigned int* __restrict tilesListStart,
+  const unsigned int* __restrict tilesListSizes,
   const double pairlist_tol,
-  bool* pairlist) {
+  bool* __restrict pairlist) {
   __shared__ double3 shPosition[block_size];
   __shared__ double3 shJGrad[block_size];
   __shared__ bool mask[block_size];
