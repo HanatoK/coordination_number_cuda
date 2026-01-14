@@ -61,11 +61,6 @@ public:
   AtomGroupPositionsCUDA(const AtomGroupPositions& hostPositions, cudaStream_t stream_in, size_t clusterSize = 1) {
     numAtoms = hostPositions.x.size();
     stream = stream_in;
-    // const size_t numClusters = size_t(numAtoms / clusterSize) + ((numAtoms % clusterSize) ? 1 : 0);
-    // atomStorageSize = numClusters * clusterSize;
-    // checkGPUError(cudaMalloc(&d_x, atomStorageSize * sizeof(double)));
-    // checkGPUError(cudaMalloc(&d_y, atomStorageSize * sizeof(double)));
-    // checkGPUError(cudaMalloc(&d_z, atomStorageSize * sizeof(double)));
     checkGPUError(cudaMalloc(&d_x, numAtoms * sizeof(double)));
     checkGPUError(cudaMalloc(&d_y, numAtoms * sizeof(double)));
     checkGPUError(cudaMalloc(&d_z, numAtoms * sizeof(double)));
@@ -139,6 +134,15 @@ void computeCoordinationNumberSelfGroup(
   double& energy,
   AtomGroupGradients& gradients1);
 
+void computeCoordinationNumberSelfGroupWithPairlist(
+  const AtomGroupPositions& pos1,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& gradients1,
+  bool rebuildPairlist,
+  bool* pairlist,
+  double pairlistTolerance = 0);
+
 inline __host__ __device__ double integer_power(double const& x, int const n) {
   double yy, ww;
   if (x == 0.0) return 0.0;
@@ -150,20 +154,6 @@ inline __host__ __device__ double integer_power(double const& x, int const n) {
   }
   return (n > 0) ? yy : 1.0/yy;
 }
-
-// inline __host__ __device__ double integer_power_2(double const& x, int const n, double& z) {
-//   double yy, ww, zz;
-//   if (x == 0.0) return 0.0;
-//   int nn = (n > 0) ? n : -n;
-//   int nnn = (n - 1 > 0) ? n - 1 : -(n + 1);
-//   ww = x;
-//   for (yy = 1.0, zz = 1.0; nn != 0; nn >>= 1, nnn >>= 1, ww *=ww) {
-//     if (nn & 1) yy *= ww;
-//     if ((nnn != 0) && (nnn & 1)) zz *= ww;
-//   }
-//   z = n * ((n > 0) ? zz : 1.0/zz);
-//   return (n > 0) ? yy : 1.0/yy;
-// }
 
 template <int N, int M>                               
 inline void __host__ __device__ coordnum(
@@ -182,17 +172,11 @@ inline void __host__ __device__ coordnum(
   const double r2 = dx * dx + dy * dy + dz * dz;
   int const en2 = N/2;
   int const ed2 = M/2;
-  // double nxn_1, dxd_1;
-  // double const xn = 1.0 - integer_power_2(r2, en2, nxn_1);
-  // double const xd_inv = 1.0 / (1.0 - integer_power_2(r2, ed2, dxd_1));
-  // double const func = xn * xd_inv;
   const double xn = integer_power(r2, en2);
   const double xd = integer_power(r2, ed2);
   const double func = (1.0-xn)/(1.0-xd);
   energy += func < 0 ? 0.0 : func;
   if (func > 0.0) {
-    // Compute forces: the negative of the gradients
-    // const double dfunc_dr2 = (nxn_1 - dxd_1 * func) * xd_inv;
     const double dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
     const double dr2_dx = 2.0 * dx * inv_r0_x;
     const double dr2_dy = 2.0 * dy * inv_r0_y;
@@ -231,10 +215,6 @@ inline void __host__ __device__ coordnum_pairlist(
   const double r2 = dx * dx + dy * dy + dz * dz;
   int const en2 = N/2;
   int const ed2 = M/2;
-  // double nxn_1, dxd_1;
-  // double const xn = 1.0 - integer_power_2(r2, en2, nxn_1);
-  // double const xd_inv = 1.0 / (1.0 - integer_power_2(r2, ed2, dxd_1));
-  // double const func = xn * xd_inv;
   const double xn = integer_power(r2, en2);
   const double xd = integer_power(r2, ed2);
   const double func_no_pairlist = (1.0-xn)/(1.0-xd);
@@ -250,15 +230,12 @@ inline void __host__ __device__ coordnum_pairlist(
   }
   energy += func < 0 ? 0.0 : func;
   if (func > 0.0) {
-    // Compute forces: the negative of the gradients
-    // const double dfunc_dr2 = (nxn_1 - dxd_1 * func) * xd_inv;
     double dfunc_dr2;
     if (use_pairlist) {
       dfunc_dr2 = func_no_pairlist * inv_one_pairlist_tol * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
     } else {
       dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
     }
-    // const double dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
     const double dr2_dx = 2.0 * dx * inv_r0_x;
     const double dr2_dy = 2.0 * dy * inv_r0_y;
     const double dr2_dz = 2.0 * dz * inv_r0_z;

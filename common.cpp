@@ -84,6 +84,56 @@ void computeCoordinationNumberSelfGroup(
   }
 }
 
+void computeCoordinationNumberSelfGroupWithPairlist(
+  const AtomGroupPositions& pos1,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& gradients1,
+  bool rebuildPairlist,
+  bool* pairlist,
+  double pairlistTolerance) {
+  const size_t numAtoms1 = pos1.x.size();
+  if (numAtoms1 < 2) return;
+  bool* pairlist_ptr = pairlist;
+  for (size_t i = 0; i < numAtoms1 - 1; ++i) {
+    double gx1 = 0.0, gy1 = 0.0, gz1 = 0.0;
+    const double x1 = pos1.x[i];
+    const double y1 = pos1.y[i];
+    const double z1 = pos1.z[i];
+    double ei = 0.0;
+    // const size_t pair_id_i = i * (2 * numAtoms1 - 1 - i) / 2;
+    for (size_t j = i + 1; j < numAtoms1; ++j) {
+      // const size_t pair_id_j = j - i - 1;
+      const double x2 = pos1.x[j];
+      const double y2 = pos1.y[j];
+      const double z2 = pos1.z[j];
+      // std::cout << fmt::format("(CPU) x1 = {}, x2 = {}\n", x1, x2);
+      if (rebuildPairlist) {
+        coordnum_pairlist<6, 12, true, true>(
+          x1, x2, y1, y2, z1, z2,
+          inv_r0, inv_r0, inv_r0, ei, gx1, gy1, gz1,
+          gradients1.gx[j], gradients1.gy[j], gradients1.gz[j],
+          pairlistTolerance, pairlist_ptr);
+      } else {
+        coordnum_pairlist<6, 12, true, false>(
+          x1, x2, y1, y2, z1, z2,
+          inv_r0, inv_r0, inv_r0, ei, gx1, gy1, gz1,
+          gradients1.gx[j], gradients1.gy[j], gradients1.gz[j],
+          pairlistTolerance, pairlist_ptr);
+      }
+      // if (pair_id_i + pair_id_j != int(pairlist_ptr - pairlist)) {
+      //   std::cout << fmt::format("k = {}, real = {}\n", pair_id_i + pair_id_j, int(pairlist_ptr - pairlist));
+      // }
+      // std::cout << fmt::format("(CPU) iid = {}, jid = {}, pairlistID = {}\n", i, j, int(pairlist_ptr - pairlist));
+      pairlist_ptr++;
+    }
+    energy += ei;
+    gradients1.gx[i] += gx1;
+    gradients1.gy[i] += gy1;
+    gradients1.gz[i] += gz1;
+  }
+}
+
 void writeToFile(
   const std::vector<double>& x,
   const std::vector<double>& y,

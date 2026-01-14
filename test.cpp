@@ -9,6 +9,7 @@ struct calculationResult {
   AtomGroupGradients gradients1;
   AtomGroupGradients gradients2;
   double energy;
+  std::vector<char> pairlist;
 };
 
 void testNumericalGradient() {
@@ -228,28 +229,73 @@ calculationResult testCoordinationNumberSelf(const AtomGroupPositions& pos1, dou
   return calculationResult{gradients1, AtomGroupGradients(), energy};
 }
 
-calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1, double cutoffDistance) {
+calculationResult testCoordinationNumberSelfPairlist(const AtomGroupPositions& pos1, double cutoffDistance) {
+  const size_t group1_size = pos1.x.size();
+
+  AtomGroupGradients gradients1;
+  gradients1.gx.resize(group1_size, 0.0);
+  gradients1.gy.resize(group1_size, 0.0);
+  gradients1.gz.resize(group1_size, 0.0);
+  double energy2 = 0;
+  AtomGroupGradients gradients2;
+  gradients2.gx.resize(group1_size, 0.0);
+  gradients2.gy.resize(group1_size, 0.0);
+  gradients2.gz.resize(group1_size, 0.0);
+  const double pairlistTolerance = 0.1;
+  std::vector<char> pairlist((group1_size - 1) * (group1_size - 1), 1);
+  double energy = 0.0;
+
+  const auto start = std::chrono::high_resolution_clock::now();
+  computeCoordinationNumberSelfGroupWithPairlist(pos1, 1.0 / cutoffDistance, energy, gradients1, true, (bool*)pairlist.data(), pairlistTolerance);
+#if 1
+  computeCoordinationNumberSelfGroupWithPairlist(pos1, 1.0 / cutoffDistance, energy2, gradients2, false, (bool*)pairlist.data(), pairlistTolerance);
+#endif
+  const auto end = std::chrono::high_resolution_clock::now();
+  const std::chrono::duration<double, std::milli> fp_ms = end - start;
+
+  std::cout << fmt::format("Coordination number: {:15.7e}, time (CPU) = {:10.5f} ms\n", energy, fp_ms.count());
+  // std::cout << fmt::format("Rrebuild pairlist = {}, no rebuild pairlist = {}\n", energy, energy2);
+
+  // Save positions and gradients to files for further analysis if needed
+  // writeToFile(pos1.x, pos1.y, pos1.z, "positions1.txt");
+  // writeToFile(pos2.x, pos2.y, pos2.z, "positions2.txt");
+  // writeToFile(gradients1.fx, gradients1.fy, gradients1.fz, "gradients1.txt");
+  // writeToFile(gradients2.fx, gradients2.fy, gradients2.fz, "gradients2.txt");
+  return calculationResult{gradients1, AtomGroupGradients(), energy, pairlist};
+}
+
+calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1, double cutoffDistance, bool testPairlist = false) {
   cudaStream_t stream;
   checkGPUError(cudaStreamCreate(&stream));
   AtomGroupPositionsCUDA cudaPos1(pos1, stream);
   computeCoordinationNumberSelfGroupCUDAObject compute;
-  compute.initialize(pos1.x.size());
+  if (testPairlist) {
+    compute.initialize(pos1.x.size(), true, 0.1);
+  } else {
+    compute.initialize(pos1.x.size());
+  }
   // AtomGroupPositionsCUDA cudaPos2(pos2, stream);
   AtomGroupGradientsCUDA cudaGradient1;
-  // AtomGroupGradientsCUDA cudaGradient2;
+  AtomGroupGradientsCUDA cudaGradient1UsePairlist;
   cudaGradient1.initialize(cudaPos1.getNumAtoms(), stream);
-  // cudaGradient2.initialize(cudaPos2.getNumAtoms(), stream);
+  cudaGradient1UsePairlist.initialize(cudaPos1.getNumAtoms(), stream);
   double* d_energy;
+  double* d_energy_pairlist;
   checkGPUError(cudaMalloc(&d_energy, sizeof(double)));
   checkGPUError(cudaMemset(d_energy, 0, sizeof(double)));
+  checkGPUError(cudaMalloc(&d_energy_pairlist, sizeof(double)));
+  checkGPUError(cudaMemset(d_energy_pairlist, 0, sizeof(double)));
   double* h_energy;
   checkGPUError(cudaMallocHost((void**)&h_energy, sizeof(double)));
   cudaGraph_t graph;
   checkGPUError(cudaGraphCreate(&graph, 0));
 
   compute.computeCoordinationNumberSelfGroupCUDA(
-    cudaPos1, cudaGradient1,
-    1.0 / cutoffDistance, d_energy, graph, stream);
+    cudaPos1, cudaGradient1, 1.0 / cutoffDistance,
+    d_energy, true, graph, stream);
+  compute.computeCoordinationNumberSelfGroupCUDA(
+    cudaPos1, cudaGradient1UsePairlist, 1.0 / cutoffDistance,
+    d_energy_pairlist, false, graph, stream);
   cudaGraphExec_t graph_exec;
 #if defined(USE_CUDA)
   checkGPUError(cudaGraphInstantiate(&graph_exec, graph));
@@ -264,20 +310,24 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
   const auto end = std::chrono::high_resolution_clock::now();
   const std::chrono::duration<double, std::milli> fp_ms = end - start;
 
-  checkGPUError(cudaMemcpyAsync(h_energy, d_energy, sizeof(double), cudaMemcpyDeviceToHost, stream));
+  checkGPUError(cudaMemcpyAsync(h_energy, d_energy_pairlist, sizeof(double), cudaMemcpyDeviceToHost, stream));
   checkGPUError(cudaStreamSynchronize(stream));
 
   std::cout << fmt::format("Coordination number: {:15.7e}, time (GPU) = {:10.5f} ms\n", *h_energy, fp_ms.count());
   const double energy = *h_energy;
-  const auto hostGradient1 = cudaGradient1.toHost();
+  const auto hostGradient1 = cudaGradient1UsePairlist.toHost();
+  auto pairlist = compute.pairlistToHost();
   checkGPUError(cudaFree(d_energy));
+  checkGPUError(cudaFree(d_energy_pairlist));
   checkGPUError(cudaFreeHost(h_energy));
   checkGPUError(cudaGraphDestroy(graph));
   checkGPUError(cudaStreamDestroy(stream));
-  return calculationResult{hostGradient1, AtomGroupGradients(), energy};
+  return calculationResult{hostGradient1, AtomGroupGradients(), energy, pairlist};
 }
 
-void compareResults(const calculationResult& cpuResult, const calculationResult& cudaResult, bool twoGroups) {
+void compareResults(const calculationResult& cpuResult,
+                    const calculationResult& cudaResult,
+                    bool twoGroups) {
   double maxRelErrorGradients1x = 0;
   double maxRelErrorGradients1y = 0;
   double maxRelErrorGradients1z = 0;
@@ -312,6 +362,23 @@ void compareResults(const calculationResult& cpuResult, const calculationResult&
 
   const double relErrorE = std::abs(cpuResult.energy - cudaResult.energy) / std::abs(cpuResult.energy);
   std::cout << fmt::format("Relative error of coordination number: {:15.7e}\n", relErrorE);
+
+  std::cout << fmt::format("Pairlist size (CPU): {}\n", cpuResult.pairlist.size());
+  std::cout << fmt::format("Pairlist size (GPU): {}\n", cudaResult.pairlist.size());
+  bool pairlist_differ = false;
+  if (cpuResult.pairlist.size() == cudaResult.pairlist.size()) {
+    for (size_t i = 0; i < cpuResult.pairlist.size(); ++i) {
+      if (cpuResult.pairlist[i] != cudaResult.pairlist[i]) {
+        // std::cout << fmt::format("Pairlist differ at index {}: cpu = {}, gpu = {}\n", i, (int)cpuResult.pairlist[i], (int)cudaResult.pairlist[i]);
+        pairlist_differ = true;
+      }
+    }
+  } else {
+    pairlist_differ = true;
+  }
+  if (pairlist_differ) {
+    std::cout << "Pairlist differ!\n";
+  }
 }
 
 int main(int argc, char* argv[]) {
@@ -326,6 +393,9 @@ int main(int argc, char* argv[]) {
 
   bool test_self_group = false;
   app.add_flag("--self_group", test_self_group, "Test the coordination number between an atom group with itself");
+
+  bool test_pairlist = false;
+  app.add_flag("--pairlist", test_pairlist, "Use pairlist for testing");
 
   unsigned int group1_size = 10000;
   unsigned int group2_size = 2005;
@@ -350,9 +420,15 @@ int main(int argc, char* argv[]) {
   if (test_self_group) {
     AtomGroupPositions pos1 = generateRandomAtomGroupPositions(123, group1_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
     double cutoffDistance = 6.0;
-    const auto cpuResult = testCoordinationNumberSelf(pos1, cutoffDistance);
-    const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance);
-    compareResults(cpuResult, gpuResult, false);
+    if (!test_pairlist) {
+      const auto cpuResult = testCoordinationNumberSelf(pos1, cutoffDistance);
+      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance);
+      compareResults(cpuResult, gpuResult, false);
+    } else {
+      const auto cpuResult = testCoordinationNumberSelfPairlist(pos1, cutoffDistance);
+      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, true);
+      compareResults(cpuResult, gpuResult, false);
+    }
   }
 
   return 0;
