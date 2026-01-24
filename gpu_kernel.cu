@@ -327,7 +327,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   __shared__ double3 shPosition[block_size];
   __shared__ double3 shJGrad[block_size];
   __shared__ bool mask[block_size];
-  __shared__ unsigned int globalJIDs[block_size];
+  __shared__ unsigned int globalJIDs[use_pairlist ? block_size : 1];
   double ei = 0;
   static constexpr const unsigned int half_block_size = block_size / 2;
   // Number of blocks required to iterate over group1
