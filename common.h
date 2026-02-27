@@ -2,6 +2,7 @@
 #include <vector>
 #include <random>
 #include <cmath>
+#include <fmt/printf.h>
 
 #if defined(USE_CUDA)
 #include <cuda_runtime.h>
@@ -134,6 +135,12 @@ void computeCoordinationNumberSelfGroup(
   double& energy,
   AtomGroupGradients& gradients1);
 
+void computeCoordinationNumberSelfGroup2(
+  const AtomGroupPositions& __restrict pos1,
+  double inv_r0,
+  double& __restrict energy,
+  AtomGroupGradients& __restrict gradients1);
+
 void computeCoordinationNumberSelfGroupWithPairlist(
   const AtomGroupPositions& pos1,
   double inv_r0,
@@ -143,7 +150,20 @@ void computeCoordinationNumberSelfGroupWithPairlist(
   bool* pairlist,
   double pairlistTolerance = 0);
 
-inline __host__ __device__ double integer_power(double const& x, int const n) {
+inline __host__ __device__ double integer_power(double const& __restrict x, int const n) {
+  double yy, ww;
+  if (x == 0.0) return 0.0;
+  int nn = (n > 0) ? n : -n;
+  ww = x;
+  for (yy = 1.0; nn != 0; nn >>= 1, ww *=ww) {
+    if (nn & 1) yy *= ww;
+    // yy *= (nn & 1) * ww;
+  }
+  return (n > 0) ? yy : 1.0/yy;
+}
+
+template <int n>
+inline __host__ __device__ double integer_power(double const& __restrict x) {
   double yy, ww;
   if (x == 0.0) return 0.0;
   int nn = (n > 0) ? n : -n;
@@ -163,17 +183,17 @@ inline void __host__ __device__ coordnum(
   double inv_r0_x,
   double inv_r0_y,
   double inv_r0_z,
-  double& energy,
-  double& gx1, double& gy1, double& gz1,
-  double& gx2, double& gy2, double& gz2) {
+  double& __restrict energy,
+  double& __restrict gx1, double& __restrict gy1, double& __restrict gz1,
+  double& __restrict gx2, double& __restrict gy2, double& __restrict gz2) {
   const double dx = (x2 - x1) * inv_r0_x;
   const double dy = (y2 - y1) * inv_r0_y;
   const double dz = (z2 - z1) * inv_r0_z;
   const double r2 = dx * dx + dy * dy + dz * dz;
   int const en2 = N/2;
   int const ed2 = M/2;
-  const double xn = integer_power(r2, en2);
-  const double xd = integer_power(r2, ed2);
+  const double xn = integer_power<N/2>(r2);
+  const double xd = integer_power<M/2>(r2);
   const double func = (1.0-xn)/(1.0-xd);
   energy += func < 0 ? 0.0 : func;
   if (func > 0.0) {
@@ -215,8 +235,8 @@ inline void __host__ __device__ coordnum_pairlist(
   const double r2 = dx * dx + dy * dy + dz * dz;
   int const en2 = N/2;
   int const ed2 = M/2;
-  const double xn = integer_power(r2, en2);
-  const double xd = integer_power(r2, ed2);
+  const double xn = integer_power<N/2>(r2);
+  const double xd = integer_power<M/2>(r2);
   const double func_no_pairlist = (1.0-xn)/(1.0-xd);
   double func, inv_one_pairlist_tol;
   if (use_pairlist) {
@@ -246,6 +266,68 @@ inline void __host__ __device__ coordnum_pairlist(
     gy2 +=  dfunc_dr2 * dr2_dy;
     gz2 +=  dfunc_dr2 * dr2_dz;
   }
+}
+
+namespace vector_ext {
+constexpr const int vsize = 4;
+typedef double v4sd __attribute__ ((vector_size(sizeof(double) * vsize)));
+typedef int v4si __attribute__ ((vector_size(sizeof(int) * vsize)));
+// v4si shuffle_mask[vsize] = {
+//   {0, 1, 2, 3},
+//   {1, 2, 3, 0},
+//   {2, 3, 0, 1},
+//   {3, 0, 1, 2}};
+template <int N, int M>
+inline void coordnum(
+  v4si mask,
+  v4sd x1, v4sd x2,
+  v4sd y1, v4sd y2,
+  v4sd z1, v4sd z2,
+  const double inv_r0_x,
+  const double inv_r0_y,
+  const double inv_r0_z,
+  double& __restrict energy,
+  const v4si& __restrict jid,
+  double* __restrict gx1, double* __restrict gy1, double* __restrict gz1,
+  double* __restrict gx2, double* __restrict gy2, double* __restrict gz2) {
+  const v4sd dx = (x2 - x1) * inv_r0_x;
+  const v4sd dy = (y2 - y1) * inv_r0_y;
+  const v4sd dz = (z2 - z1) * inv_r0_z;
+  const v4sd r2 = dx * dx + dy * dy + dz * dz;
+  constexpr int const en2 = N/2;
+  constexpr int const ed2 = M/2;
+  v4sd xn;
+  v4sd xd;
+  for (int i = 0; i < vsize; ++i) {
+    xn[i] = 1.0;
+    xd[i] = 1.0;
+  }
+  for (int i = 0; i < en2; ++i) {
+    xn *= r2;
+  }
+  for (int i = 0; i < ed2; ++i) {
+    xd *= r2;
+  }
+  v4sd func = (1.0-xn)/(1.0-xd);
+  func = func < 0.0 ? 0.0 : func;
+  const v4sd dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
+  const v4sd dr2_dx = 2.0 * dfunc_dr2 * dx * inv_r0_x;
+  const v4sd dr2_dy = 2.0 * dfunc_dr2 * dy * inv_r0_y;
+  const v4sd dr2_dz = 2.0 * dfunc_dr2 * dz * inv_r0_z;
+  for (int i = 0; i < vsize; ++i) {
+    const bool m = mask[i];
+    energy += m ? func[i] : 0.0;
+    if (m) {
+      gx1[i] += -dr2_dx[i];
+      gy1[i] += -dr2_dy[i];
+      gz1[i] += -dr2_dz[i];
+      // fmt::println("r2[{}] = {}", i, double(r2[i]));
+      gx2[jid[i]] += dr2_dx[i];
+      gy2[jid[i]] += dr2_dy[i];
+      gz2[jid[i]] += dr2_dz[i];
+    }
+  }
+}
 }
 
 #endif // COMMON_H
