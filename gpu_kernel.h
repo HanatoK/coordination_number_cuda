@@ -31,7 +31,7 @@ public:
 private:
   void prepareTilesList(unsigned int numAtoms);
 private:
-  static constexpr const unsigned int self_group_block_size = 32;
+  static constexpr const unsigned int self_group_block_size = 128;
   unsigned int* d_tilesList = nullptr;
   unsigned int* d_tilesListStart = nullptr;
   unsigned int* d_tilesListSizes = nullptr;

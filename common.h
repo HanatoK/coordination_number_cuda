@@ -223,7 +223,9 @@ inline void __host__ __device__ coordnum_pairlist(
   double& gx2, double& gy2, double& gz2,
   double pairlist_tol,
   bool* pairlist_elem) {
-  if (use_pairlist && !rebuild_pairlist) {
+  static_assert(N % 2 == 0, "");
+  constexpr bool m_is_2n = (M == 2 * N);
+  if constexpr (use_pairlist && !rebuild_pairlist) {
     bool const within = *pairlist_elem;
     if (!within) {
       return;
@@ -233,28 +235,41 @@ inline void __host__ __device__ coordnum_pairlist(
   const double dy = (y2 - y1) * inv_r0_y;
   const double dz = (z2 - z1) * inv_r0_z;
   const double r2 = dx * dx + dy * dy + dz * dz;
-  int const en2 = N/2;
-  int const ed2 = M/2;
-  const double xn = integer_power<N/2>(r2);
-  const double xd = integer_power<M/2>(r2);
-  const double func_no_pairlist = (1.0-xn)/(1.0-xd);
-  double func, inv_one_pairlist_tol;
-  if (use_pairlist) {
+  double func, inv_one_pairlist_tol, func_no_pairlist, xn, xd;
+  constexpr int const en2 = N/2;
+  constexpr int const ed2 = M/2;
+  if constexpr (m_is_2n) {
+    xn = integer_power<N/2>(r2);
+    func_no_pairlist = 1.0 / (1.0 + xn);
+  } else {
+    xn = integer_power<N/2>(r2);
+    xd = integer_power<M/2>(r2);
+    func_no_pairlist = (1.0-xn)/(1.0-xd);
+  }
+  if constexpr (use_pairlist) {
     inv_one_pairlist_tol = 1 / (1.0-pairlist_tol);
     func = (func_no_pairlist - pairlist_tol) * inv_one_pairlist_tol;
   } else {
     func = func_no_pairlist;
   }
-  if (use_pairlist && rebuild_pairlist) {
+  if constexpr (use_pairlist && rebuild_pairlist) {
     *pairlist_elem = (func > (-pairlist_tol * 0.5)) ? true : false;
   }
   energy += func < 0 ? 0.0 : func;
   if (func > 0.0) {
     double dfunc_dr2;
-    if (use_pairlist) {
-      dfunc_dr2 = func_no_pairlist * inv_one_pairlist_tol * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
+    if constexpr (m_is_2n) {
+      if (use_pairlist) {
+        dfunc_dr2 = -0.5 * (func_no_pairlist * func_no_pairlist) * N * xn / r2 * (inv_one_pairlist_tol);
+      } else {
+        dfunc_dr2 = -0.5 * (func_no_pairlist * func_no_pairlist) * N * xn / r2;
+      }
     } else {
-      dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
+      if (use_pairlist) {
+        dfunc_dr2 = func_no_pairlist * inv_one_pairlist_tol * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
+      } else {
+        dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
+      }
     }
     const double dr2_dx = 2.0 * dx * inv_r0_x;
     const double dr2_dy = 2.0 * dy * inv_r0_y;

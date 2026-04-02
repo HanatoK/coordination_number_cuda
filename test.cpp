@@ -12,7 +12,9 @@ struct calculationResult {
   std::vector<char> pairlist;
 };
 
-void testNumericalGradient() {
+void testNumericalGradient(const bool use_pairlist) {
+  const double pairlistTolerance = 0.1;
+  bool pairlist = true;
   std::random_device rd;
   std::mt19937 gen(rd());
   const size_t num_tests = 10;
@@ -21,6 +23,25 @@ void testNumericalGradient() {
   std::normal_distribution<double> dis(cutoffDistance, cutoffDistance / 3.0);
   // Numerical gradient
   constexpr const size_t num_deltas = 4;
+  auto func = [&](double x1, double x2,
+    double y1, double y2,
+    double z1, double z2,
+    double inv_r0_x,
+    double inv_r0_y,
+    double inv_r0_z,
+    double& energy,
+    double& gx1, double& gy1, double& gz1,
+    double& gx2, double& gy2, double& gz2){
+      if (use_pairlist) {
+        return coordnum_pairlist<6, 12, true, false>(
+        x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy,
+        gx1, gy1, gz1, gx2, gy2, gz2, pairlistTolerance, &pairlist);
+      } else {
+        return coordnum_pairlist<6, 12, false, false>(
+        x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy,
+        gx1, gy1, gz1, gx2, gy2, gz2, pairlistTolerance, &pairlist);
+      }
+    };
   for (size_t i = 0; i < num_tests; ++i) {
     double delta = 1e-2;
     const double x1 = dis(gen);
@@ -32,9 +53,10 @@ void testNumericalGradient() {
     double energy = 0.0;
     double fx1 = 0.0, fy1 = 0.0, fz1 = 0.0;
     double fx2 = 0.0, fy2 = 0.0, fz2 = 0.0;
-    coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy,
-                    fx1, fy1, fz1, fx2, fy2, fz2);
+    func(x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy,
+        fx1, fy1, fz1, fx2, fy2, fz2);
     std::cout << fmt::format("Group1 = ({:12.7e}, {:12.7e}, {:12.7e}), group2 = ({:12.7e}, {:12.7e}, {:12.7e}), coordnum = {:12.7e}\n", x1, y1, z1, x2, y2, z2, energy);
+    std::cout << fmt::format("Grad1 = ({:12.7e}, {:12.7e}, {:12.7e}), grad2 = ({:12.7e}, {:12.7e}, {:12.7e})\n", fx1, fy1, fz1, fx2, fy2, fz2);
     for (size_t j = 0; j < num_deltas; ++j) {
       double energy_prev = 0, energy_next = 0;
       double tmp_fx1 = 0;
@@ -44,50 +66,50 @@ void testNumericalGradient() {
       double tmp_fy2 = 0;
       double tmp_fz2 = 0;
       // For position x1
-      coordnum<6, 12>(x1 - delta, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
-      coordnum<6, 12>(x1 + delta, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1 - delta, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1 + delta, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
       double numerical_fx1 = (energy_next - energy_prev) / (2 * delta);
       // For position y1
       energy_prev = 0;
       energy_next = 0;
-      coordnum<6, 12>(x1, x2, y1 - delta, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
-      coordnum<6, 12>(x1, x2, y1 + delta, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1 - delta, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1 + delta, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
       double numerical_fy1 = (energy_next - energy_prev) / (2 * delta);
       // For position z1
       energy_prev = 0;
       energy_next = 0;
-      coordnum<6, 12>(x1, x2, y1, y2, z1 - delta, z2, inv_r0, inv_r0, inv_r0, energy_prev,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
-      coordnum<6, 12>(x1, x2, y1, y2, z1 + delta, z2, inv_r0, inv_r0, inv_r0, energy_next,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1, y2, z1 - delta, z2, inv_r0, inv_r0, inv_r0, energy_prev,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1, y2, z1 + delta, z2, inv_r0, inv_r0, inv_r0, energy_next,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
       double numerical_fz1 = (energy_next - energy_prev) / (2 * delta);
       // For position x2
       energy_prev = 0;
       energy_next = 0;
-      coordnum<6, 12>(x1, x2 - delta, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
-      coordnum<6, 12>(x1, x2 + delta, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2 - delta, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2 + delta, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
       double numerical_fx2 = (energy_next - energy_prev) / (2 * delta);
       // For position y2
       energy_prev = 0;
       energy_next = 0;
-      coordnum<6, 12>(x1, x2, y1, y2 - delta, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
-      coordnum<6, 12>(x1, x2, y1, y2 + delta, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1, y2 - delta, z1, z2, inv_r0, inv_r0, inv_r0, energy_prev,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1, y2 + delta, z1, z2, inv_r0, inv_r0, inv_r0, energy_next,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
       double numerical_fy2 = (energy_next - energy_prev) / (2 * delta);
       // For position z2
       energy_prev = 0;
       energy_next = 0;
-      coordnum<6, 12>(x1, x2, y1, y2, z1, z2 - delta, inv_r0, inv_r0, inv_r0, energy_prev,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
-      coordnum<6, 12>(x1, x2, y1, y2, z1, z2 + delta, inv_r0, inv_r0, inv_r0, energy_next,
-                      tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1, y2, z1, z2 - delta, inv_r0, inv_r0, inv_r0, energy_prev,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
+      func(x1, x2, y1, y2, z1, z2 + delta, inv_r0, inv_r0, inv_r0, energy_next,
+           tmp_fx1, tmp_fy1, tmp_fz1, tmp_fx2, tmp_fy2, tmp_fz2);
       double numerical_fz2 = (energy_next - energy_prev) / (2 * delta);
 
       // Compute the error for gradient1
@@ -405,7 +427,7 @@ int main(int argc, char* argv[]) {
   CLI11_PARSE(app, argc, argv);
 
   if (test_numerical_gradient) {
-    testNumericalGradient();
+    testNumericalGradient(test_pairlist);
   }
 
   if (test_two_groups) {
