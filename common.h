@@ -2,6 +2,7 @@
 #include <vector>
 #include <random>
 #include <cmath>
+#include <algorithm>
 #include <fmt/printf.h>
 
 #if defined(USE_CUDA)
@@ -259,13 +260,13 @@ inline void __host__ __device__ coordnum_pairlist(
   if (func > 0.0) {
     double dfunc_dr2;
     if constexpr (m_is_2n) {
-      if (use_pairlist) {
+      if constexpr (use_pairlist) {
         dfunc_dr2 = -0.5 * (func_no_pairlist * func_no_pairlist) * N * xn / r2 * (inv_one_pairlist_tol);
       } else {
         dfunc_dr2 = -0.5 * (func_no_pairlist * func_no_pairlist) * N * xn / r2;
       }
     } else {
-      if (use_pairlist) {
+      if constexpr (use_pairlist) {
         dfunc_dr2 = func_no_pairlist * inv_one_pairlist_tol * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
       } else {
         dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
@@ -344,5 +345,146 @@ inline void coordnum(
   }
 }
 }
+
+class SplineInterpolate {
+public:
+  enum class boundary_condition {natural, not_a_knot};
+  SplineInterpolate(const std::vector<double>& X,
+                    const std::vector<double>& Y,
+                    boundary_condition bc = boundary_condition::natural);
+  class Matrix {
+  private:
+    std::vector<double> m_data;
+    size_t m_rows;
+    size_t m_cols;
+  public:
+    Matrix(size_t rows, size_t cols): m_data(rows * cols, 0), m_rows(rows), m_cols(cols) {}
+    double& operator()(size_t i, size_t j) {return m_data[i * m_cols + j];}
+    const double& operator()(size_t i, size_t j) const {return m_data[i * m_cols + j];}
+    size_t numRows() const {return m_rows;}
+    size_t numColumns() const {return m_cols;}
+  };
+  inline int fastIndex(const double x) const {
+    // assume the steps are the same
+    const double step = m_X[1] - m_X[0];
+    // assume m_X is sorted to be monotonically increasing
+    const int index = std::min(
+      static_cast<int>(std::floor((x - m_X[0]) / step)),
+      static_cast<int>(m_X.size() - 2));
+    return index > 0 ? index : 0;
+  }
+  inline double evaluate(const double x) const {
+    const int ix = fastIndex(x);
+    const double dx = x - m_X[ix];
+    const double dx2 = dx * dx;
+    const double dx3 = dx2 * dx;
+    const double interp_y = m_A[ix] + m_B[ix] * dx + m_C[ix] * dx2 + m_D[ix] * dx3;
+    return interp_y;
+  }
+  inline double evaluateDerivative(const double x) const {
+    const int ix = fastIndex(x);
+    const double dx = x - m_X[ix];
+    const double dx2 = dx * dx;
+    const double dydx = m_B[ix] + m_C[ix] * dx * 2.0 + m_D[ix] * dx2 * 3.0;
+    return dydx;
+  }
+  Matrix GaussianElimination(Matrix& matA, Matrix& matB);
+private:
+  void calcFactors();
+  boundary_condition m_bc;
+  std::vector<double> m_X;
+  std::vector<double> m_Y;
+  std::vector<double> m_A;
+  std::vector<double> m_B;
+  std::vector<double> m_C;
+  std::vector<double> m_D;
+};
+
+template <bool use_pairlist, bool rebuild_pairlist>
+inline void __host__ __device__ coordnum_pairlist_interp(
+  double x1, double x2,
+  double y1, double y2,
+  double z1, double z2,
+  double inv_r0_x,
+  double inv_r0_y,
+  double inv_r0_z,
+  double& energy,
+  double& gx1, double& gy1, double& gz1,
+  double& gx2, double& gy2, double& gz2,
+  double pairlist_tol,
+  bool* pairlist_elem,
+  const SplineInterpolate& spline) {
+  // static_assert(N % 2 == 0, "");
+  // constexpr bool m_is_2n = (M == 2 * N);
+  if constexpr (use_pairlist && !rebuild_pairlist) {
+    bool const within = *pairlist_elem;
+    if (!within) {
+      return;
+    }
+  }
+  const double dx = (x2 - x1) * inv_r0_x;
+  const double dy = (y2 - y1) * inv_r0_y;
+  const double dz = (z2 - z1) * inv_r0_z;
+  const double r2 = dx * dx + dy * dy + dz * dz;
+  double func, inv_one_pairlist_tol, func_no_pairlist/*, xn, xd*/;
+  // constexpr int const en2 = N/2;
+  // constexpr int const ed2 = M/2;
+  // if constexpr (m_is_2n) {
+  //   xn = integer_power<N/2>(r2);
+  //   func_no_pairlist = 1.0 / (1.0 + xn);
+  // } else {
+  //   xn = integer_power<N/2>(r2);
+  //   xd = integer_power<M/2>(r2);
+  //   func_no_pairlist = (1.0-xn)/(1.0-xd);
+  // }
+  func_no_pairlist = spline.evaluate(r2);
+  if constexpr (use_pairlist) {
+    inv_one_pairlist_tol = 1 / (1.0-pairlist_tol);
+    func = (func_no_pairlist - pairlist_tol) * inv_one_pairlist_tol;
+  } else {
+    func = func_no_pairlist;
+  }
+  if constexpr (use_pairlist && rebuild_pairlist) {
+    *pairlist_elem = (func > (-pairlist_tol * 0.5)) ? true : false;
+  }
+  energy += func < 0 ? 0.0 : func;
+  if (func > 0.0) {
+    double dfunc_dr2 = spline.evaluateDerivative(r2);
+    if constexpr (use_pairlist) {
+      dfunc_dr2 *= inv_one_pairlist_tol;
+    }
+    // if constexpr (m_is_2n) {
+    //   if (use_pairlist) {
+    //     dfunc_dr2 = -0.5 * (func_no_pairlist * func_no_pairlist) * N * xn / r2 * (inv_one_pairlist_tol);
+    //   } else {
+    //     dfunc_dr2 = -0.5 * (func_no_pairlist * func_no_pairlist) * N * xn / r2;
+    //   }
+    // } else {
+    //   if (use_pairlist) {
+    //     dfunc_dr2 = func_no_pairlist * inv_one_pairlist_tol * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
+    //   } else {
+    //     dfunc_dr2 = func * ((ed2 * xd) / ((1.0 - xd) * r2) - (en2 * xn / ((1.0 - xn) * r2)));
+    //   }
+    // }
+    const double dr2_dx = 2.0 * dx * inv_r0_x;
+    const double dr2_dy = 2.0 * dy * inv_r0_y;
+    const double dr2_dz = 2.0 * dz * inv_r0_z;
+    gx1 += -dfunc_dr2 * dr2_dx;
+    gy1 += -dfunc_dr2 * dr2_dy;
+    gz1 += -dfunc_dr2 * dr2_dz;
+    gx2 +=  dfunc_dr2 * dr2_dx;
+    gy2 +=  dfunc_dr2 * dr2_dy;
+    gz2 +=  dfunc_dr2 * dr2_dz;
+  }
+}
+
+void computeCoordinationNumberSelfGroupInterpolate(
+  const AtomGroupPositions& __restrict pos1,
+  double inv_r0,
+  double& __restrict energy,
+  AtomGroupGradients& __restrict gradients1,
+  const SplineInterpolate& spline);
+
+SplineInterpolate genCoordNumInterp(int n = 6, int m = 12, double r2_min = 0.0, double r2_max = 20.0, size_t points = 2000);
 
 #endif // COMMON_H

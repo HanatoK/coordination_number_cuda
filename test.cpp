@@ -251,6 +251,30 @@ calculationResult testCoordinationNumberSelf(const AtomGroupPositions& pos1, dou
   return calculationResult{gradients1, AtomGroupGradients(), energy};
 }
 
+calculationResult testCoordinationNumberSelfInterp(const AtomGroupPositions& pos1, double cutoffDistance) {
+  const size_t group1_size = pos1.x.size();
+  AtomGroupGradients gradients1;
+  gradients1.gx.resize(group1_size, 0.0);
+  gradients1.gy.resize(group1_size, 0.0);
+  gradients1.gz.resize(group1_size, 0.0);
+  double energy = 0.0;
+  const SplineInterpolate spline = genCoordNumInterp();
+
+  const auto start = std::chrono::high_resolution_clock::now();
+  computeCoordinationNumberSelfGroupInterpolate(pos1, 1.0 / cutoffDistance, energy, gradients1, spline);
+  const auto end = std::chrono::high_resolution_clock::now();
+  const std::chrono::duration<double, std::milli> fp_ms = end - start;
+
+  std::cout << fmt::format("Coordination number: {:15.7e}, time (CPU Interp) = {:10.5f} ms\n", energy, fp_ms.count());
+
+  // Save positions and gradients to files for further analysis if needed
+  // writeToFile(pos1.x, pos1.y, pos1.z, "positions1.txt");
+  // writeToFile(pos2.x, pos2.y, pos2.z, "positions2.txt");
+  // writeToFile(gradients1.fx, gradients1.fy, gradients1.fz, "gradients1.txt");
+  // writeToFile(gradients2.fx, gradients2.fy, gradients2.fz, "gradients2.txt");
+  return calculationResult{gradients1, AtomGroupGradients(), energy};
+}
+
 calculationResult testCoordinationNumberSelfPairlist(const AtomGroupPositions& pos1, double cutoffDistance) {
   const size_t group1_size = pos1.x.size();
 
@@ -349,7 +373,9 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
 
 void compareResults(const calculationResult& cpuResult,
                     const calculationResult& cudaResult,
-                    bool twoGroups) {
+                    bool twoGroups,
+                    const std::string& s1 = "CPU",
+                    const std::string& s2 = "GPU") {
   double maxRelErrorGradients1x = 0;
   double maxRelErrorGradients1y = 0;
   double maxRelErrorGradients1z = 0;
@@ -385,8 +411,8 @@ void compareResults(const calculationResult& cpuResult,
   const double relErrorE = std::abs(cpuResult.energy - cudaResult.energy) / std::abs(cpuResult.energy);
   std::cout << fmt::format("Relative error of coordination number: {:15.7e}\n", relErrorE);
 
-  std::cout << fmt::format("Pairlist size (CPU): {}\n", cpuResult.pairlist.size());
-  std::cout << fmt::format("Pairlist size (GPU): {}\n", cudaResult.pairlist.size());
+  std::cout << fmt::format("Pairlist size ({}): {}\n", s1, cpuResult.pairlist.size());
+  std::cout << fmt::format("Pairlist size ({}): {}\n", s2, cudaResult.pairlist.size());
   bool pairlist_differ = false;
   if (cpuResult.pairlist.size() == cudaResult.pairlist.size()) {
     for (size_t i = 0; i < cpuResult.pairlist.size(); ++i) {
@@ -445,7 +471,13 @@ int main(int argc, char* argv[]) {
     if (!test_pairlist) {
       const auto cpuResult = testCoordinationNumberSelf(pos1, cutoffDistance);
       const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance);
+#ifdef TRY_INTERP
+      const auto cpuResultInterp = testCoordinationNumberSelfInterp(pos1, cutoffDistance);
+#endif
       compareResults(cpuResult, gpuResult, false);
+#ifdef TRY_INTERP
+      compareResults(cpuResult, cpuResultInterp, false, "CPU", "CPU Interp");
+#endif
     } else {
       const auto cpuResult = testCoordinationNumberSelfPairlist(pos1, cutoffDistance);
       const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, true);
