@@ -343,11 +343,10 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
     cudaPos1, cudaGradient1UsePairlist, 1.0 / cutoffDistance,
     d_energy_pairlist, false, graph, stream);
   cudaGraphExec_t graph_exec;
-#if defined(USE_CUDA)
-  checkGPUError(cudaGraphInstantiate(&graph_exec, graph));
-#elif defined(USE_HIP)
-  checkGPUError(hipGraphInstantiate(&graph_exec, graph, NULL, NULL, 0));
-#endif
+  cudaGraphInstantiateParams params{0};
+  params.flags = cudaGraphInstantiateFlagUpload;
+  params.uploadStream = stream;
+  checkGPUError(cudaGraphInstantiateWithParams(&graph_exec, graph, &params));
   checkGPUError(cudaStreamSynchronize(stream));
 
   const auto start = std::chrono::high_resolution_clock::now();

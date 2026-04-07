@@ -41,8 +41,16 @@
 #define cudaGraphCreate hipGraphCreate
 #endif
 
-#ifndef cudaGraphInstantiate
-#define cudaGraphInstantiate hipGraphInstantiate
+#ifndef cudaGraphInstantiateWithParams
+#define cudaGraphInstantiateWithParams hipGraphInstantiateWithParams
+#endif
+
+#ifndef cudaGraphInstantiateParams
+#define cudaGraphInstantiateParams hipGraphInstantiateParams
+#endif
+
+#ifndef cudaGraphInstantiateFlagUpload
+#define cudaGraphInstantiateFlagUpload hipGraphInstantiateFlagUpload
 #endif
 
 #ifndef cudaGraphLaunch
