@@ -13,6 +13,21 @@ void computeCoordinationNumberTwoGroupsCUDA(
   cudaGraph_t& graph,
   cudaStream_t stream);
 
+void computeCoordinationNumberTwoGroupsCUDAPairlist(
+  const AtomGroupPositionsCUDA& group1,
+  const AtomGroupPositionsCUDA& group2,
+  AtomGroupGradientsCUDA& gradient1,
+  AtomGroupGradientsCUDA& gradient2,
+  double inv_r0,
+  double* d_energy,
+  cudaGraph_t& graph,
+  cudaStream_t stream,
+  bool* pairlist,
+  double pairlist_tol,
+  bool rebuild_pairlist,
+  cudaGraphNode_t& node,
+  const std::vector<cudaGraphNode_t>& dependencies);
+
 class computeCoordinationNumberSelfGroupCUDAObject {
 public:
   computeCoordinationNumberSelfGroupCUDAObject() {}

@@ -56,6 +56,56 @@ void computeCoordinationNumberTwoGroups(
   }
 }
 
+void computeCoordinationNumberTwoGroupsWithPairlist(
+  const AtomGroupPositions& pos1,
+  const AtomGroupPositions& pos2,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& gradients1,
+  AtomGroupGradients& gradients2,
+  bool rebuildPairlist,
+  bool* pairlist,
+  double pairlistTolerance) {
+  const size_t numAtoms1 = pos1.x.size();
+  const size_t numAtoms2 = pos2.x.size();
+  // bool* pairlist_ptr = pairlist;
+  for (size_t i = 0; i < numAtoms1; ++i) {
+    double gx1 = 0.0, gy1 = 0.0, gz1 = 0.0;
+    const double x1 = pos1.x[i];
+    const double y1 = pos1.y[i];
+    const double z1 = pos1.z[i];
+    double ei = 0.0;
+    for (size_t j = 0; j < numAtoms2; ++j) {
+      const double x2 = pos2.x[j];
+      const double y2 = pos2.y[j];
+      const double z2 = pos2.z[j];
+      // coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei, gx1, gy1, gz1,
+      //                 gradients2.gx[j], gradients2.gy[j], gradients2.gz[j]);
+      bool* pairlist_ptr = &pairlist[i*numAtoms2+j];
+      if (rebuildPairlist) {
+        coordnum_pairlist<6, 12, true, true>(
+          x1, x2, y1, y2, z1, z2,
+          inv_r0, inv_r0, inv_r0,
+          ei, gx1, gy1, gz1,
+          gradients2.gx[j], gradients2.gy[j], gradients2.gz[j],
+          pairlistTolerance, pairlist_ptr);
+      } else {
+        coordnum_pairlist<6, 12, true, false>(
+          x1, x2, y1, y2, z1, z2,
+          inv_r0, inv_r0, inv_r0,
+          ei, gx1, gy1, gz1,
+          gradients2.gx[j], gradients2.gy[j], gradients2.gz[j],
+          pairlistTolerance, pairlist_ptr);
+      }
+      // pairlist_ptr++;
+    }
+    energy += ei;
+    gradients1.gx[i] += gx1;
+    gradients1.gy[i] += gy1;
+    gradients1.gz[i] += gz1;
+  }
+}
+
 void computeCoordinationNumberSelfGroup(
   const AtomGroupPositions& __restrict pos1,
   double inv_r0,

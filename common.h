@@ -101,9 +101,12 @@ public:
     checkGPUError(cudaMemsetAsync(d_gy, 0, numAtoms * sizeof(double), stream));
     checkGPUError(cudaMemsetAsync(d_gz, 0, numAtoms * sizeof(double), stream));
   }
-  double* getDeviceX() const { return d_gx; }
-  double* getDeviceY() const { return d_gy; }
-  double* getDeviceZ() const { return d_gz; }
+  const double* getDeviceX() const { return d_gx; }
+  const double* getDeviceY() const { return d_gy; }
+  const double* getDeviceZ() const { return d_gz; }
+  double* getDeviceX() { return d_gx; }
+  double* getDeviceY() { return d_gy; }
+  double* getDeviceZ() { return d_gz; }
   AtomGroupGradients toHost() const {
     AtomGroupGradients result;
     result.gx.resize(numAtoms);
@@ -129,6 +132,17 @@ void computeCoordinationNumberTwoGroups(
   double& energy,
   AtomGroupGradients& gradients1,
   AtomGroupGradients& gradients2);
+
+void computeCoordinationNumberTwoGroupsWithPairlist(
+  const AtomGroupPositions& pos1,
+  const AtomGroupPositions& pos2,
+  double inv_r0,
+  double& energy,
+  AtomGroupGradients& gradients1,
+  AtomGroupGradients& gradients2,
+  bool rebuildPairlist,
+  bool* pairlist,
+  double pairlistTolerance = 0);
 
 void computeCoordinationNumberSelfGroup(
   const AtomGroupPositions& pos1,

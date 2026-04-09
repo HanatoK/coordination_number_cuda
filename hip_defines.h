@@ -65,6 +65,14 @@
 #define cudaGraphAddKernelNode hipGraphAddKernelNode
 #endif
 
+#ifndef cudaGraphAddMemsetNode
+#define cudaGraphAddMemsetNode hipGraphAddMemsetNode
+#endif
+
+#ifndef cudaMemsetParams
+#define cudaMemsetParams hipMemsetParams
+#endif
+
 #ifndef cudaGraphDestroy
 #define cudaGraphDestroy hipGraphDestroy
 #endif
