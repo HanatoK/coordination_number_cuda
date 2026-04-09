@@ -242,11 +242,13 @@ calculationResult testCoordinationNumberCUDA(const AtomGroupPositions& pos1, con
     cudaPos1, cudaPos2, cudaGradient1, cudaGradient2,
     1.0 / cutoffDistance, d_energy, h_energy, d_tbcount, graph);
   cudaGraphExec_t graph_exec;
-#if defined(USE_CUDA)
-  checkGPUError(cudaGraphInstantiate(&graph_exec, graph));
-#elif defined(USE_HIP)
-  checkGPUError(hipGraphInstantiate(&graph_exec, graph, NULL, NULL, 0));
-#endif
+  cudaGraphInstantiateParams params{0};
+  params.flags = cudaGraphInstantiateFlagUpload;
+  params.uploadStream = stream;
+  checkGPUError(cudaGraphInstantiateWithParams(&graph_exec, graph, &params))
+  if (params.result_out != cudaGraphInstantiateSuccess) {
+    throw std::string("Error on instantiate the CUDA graph");
+  }
   checkGPUError(cudaStreamSynchronize(stream));
 
   const auto start = std::chrono::high_resolution_clock::now();
@@ -340,11 +342,13 @@ calculationResult testCoordinationNumberCUDAPairlist(const AtomGroupPositions& p
     d_pairlist, pairlistTolerance, false, node_compute, clear_nodes);
 #endif
   cudaGraphExec_t graph_exec;
-#if defined(USE_CUDA)
-  checkGPUError(cudaGraphInstantiate(&graph_exec, graph));
-#elif defined(USE_HIP)
-  checkGPUError(hipGraphInstantiate(&graph_exec, graph, NULL, NULL, 0));
-#endif
+  cudaGraphInstantiateParams params{0};
+  params.flags = cudaGraphInstantiateFlagUpload;
+  params.uploadStream = stream;
+  checkGPUError(cudaGraphInstantiateWithParams(&graph_exec, graph, &params))
+  if (params.result_out != cudaGraphInstantiateSuccess) {
+    throw std::string("Error on instantiate the CUDA graph");
+  }
   checkGPUError(cudaStreamSynchronize(stream));
 
   const auto start = std::chrono::high_resolution_clock::now();

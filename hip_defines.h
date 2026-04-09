@@ -53,6 +53,10 @@
 #define cudaGraphInstantiateFlagUpload hipGraphInstantiateFlagUpload
 #endif
 
+#ifndef cudaGraphInstantiateSuccess
+#define cudaGraphInstantiateSuccess hipGraphInstantiateSuccess
+#endif
+
 #ifndef cudaGraphLaunch
 #define cudaGraphLaunch hipGraphLaunch
 #endif
