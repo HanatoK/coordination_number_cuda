@@ -34,7 +34,9 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   double* __restrict gy2,
   double* __restrict gz2,
   const double pairlist_tol,
-  bool* __restrict pairlist) {
+  bool* __restrict pairlist,
+  unsigned int* __restrict tbcount,
+  double* __restrict h_energy) {
   // TODO: Figure out a way to remove this limitation
   static_assert(block_size == group2BatchSize * numGroup2BatchesPerBlock,
                 "block_size != group2BatchSize * numGroup2BatchesPerBlock");
@@ -43,6 +45,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   __shared__ double3 shJGrad[numGroup2BatchesPerBlock][group2BatchSize];
   __shared__ bool shPairlist[block_size][numGroup2BatchesPerBlock][group2BatchSize];
   __shared__ bool shJMask[group2BatchSize];
+  __shared__ bool isLastBlockDone;
   // bool* pairlistStart;
   // Total energy
   double ei = 0;
@@ -116,12 +119,12 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
           const double y2 = shPosition[jid].y;
           const double z2 = shPosition[jid].z;
           if constexpr (!use_pairlist) {
-            coordnum<N, M>(
+            coordnum_pairlist<N, M, false, false>(
               x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
               iGrad.x, iGrad.y, iGrad.z,
               shJGrad[group2BatchID][jid].x,
               shJGrad[group2BatchID][jid].y,
-              shJGrad[group2BatchID][jid].z);
+              shJGrad[group2BatchID][jid].z, 0, nullptr);
           } else {
             if constexpr (!rebuild_pairlist) {
               coordnum_pairlist<N, M, use_pairlist, rebuild_pairlist>(
@@ -184,6 +187,9 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
       atomicAdd(&gz1[tid], iGrad.z);
     }
   }
+  if (threadIdx.x == 0) {
+    isLastBlockDone = false;
+  }
   // Reduction for energy
   __syncthreads();
 #if defined(USE_CUDA)
@@ -195,6 +201,18 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
   if (threadIdx.x == 0) {
     atomicAdd(energy, total_e);
+    __threadfence();
+    unsigned int value = atomicInc(tbcount, gridDim.x);
+    isLastBlockDone = (value == (gridDim.x - 1));
+  }
+  __syncthreads();
+  if (isLastBlockDone) {
+    if (threadIdx.x == 0) {
+      *h_energy = *energy;
+      *energy = 0;
+      tbcount[0] = 0;
+      __threadfence();
+    }
   }
 }
 
@@ -205,13 +223,14 @@ void computeCoordinationNumberTwoGroupsCUDA(
   AtomGroupGradientsCUDA& gradient2,
   double inv_r0,
   double* d_energy,
-  cudaGraph_t& graph,
-  cudaStream_t stream) {
+  double* h_energy,
+  unsigned int* d_tbcount,
+  cudaGraph_t& graph) {
   unsigned int numAtoms1 = group1.getNumAtoms();
   unsigned int numAtoms2 = group2.getNumAtoms();
   if (numAtoms2 > numAtoms1) {
     computeCoordinationNumberTwoGroupsCUDA(
-      group2, group1, gradient2, gradient1, inv_r0, d_energy, graph, stream);
+      group2, group1, gradient2, gradient1, inv_r0, d_energy, h_energy, d_tbcount, graph);
     return;
   }
   const double* pos1x = group1.getDeviceX();
@@ -234,7 +253,9 @@ void computeCoordinationNumberTwoGroupsCUDA(
     &numAtoms1, &numAtoms2,
     &inv_r0, &d_energy,
     &g1x, &g1y, &g1z,
-    &g2x, &g2y, &g2z, &pairlist_tol, &pairlist};
+    &g2x, &g2y, &g2z,
+    &pairlist_tol, &pairlist,
+    &d_tbcount, &h_energy};
   const unsigned int minNumAtoms = std::min(numAtoms1, numAtoms2);
   // I'm not sure if it's necessary to limit the number of blocks
   // constexpr const unsigned int maxNumBlocks = 65536;
@@ -294,8 +315,9 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
   AtomGroupGradientsCUDA& gradient2,
   double inv_r0,
   double* d_energy,
+  double* h_energy,
+  unsigned int* d_tbcount,
   cudaGraph_t& graph,
-  cudaStream_t stream,
   bool* pairlist,
   double pairlist_tol,
   bool rebuild_pairlist,
@@ -305,7 +327,8 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
   unsigned int numAtoms2 = group2.getNumAtoms();
   if (numAtoms2 > numAtoms1) {
     computeCoordinationNumberTwoGroupsCUDAPairlist(
-      group2, group1, gradient2, gradient1, inv_r0, d_energy, graph, stream,
+      group2, group1, gradient2, gradient1, inv_r0,
+      d_energy, h_energy, d_tbcount, graph,
       pairlist, pairlist_tol, rebuild_pairlist, node, dependencies);
     return;
   }
@@ -327,7 +350,10 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
     &numAtoms1, &numAtoms2,
     &inv_r0, &d_energy,
     &g1x, &g1y, &g1z,
-    &g2x, &g2y, &g2z, &pairlist_tol, &pairlist};
+    &g2x, &g2y, &g2z,
+    &pairlist_tol, &pairlist,
+    &d_tbcount, &h_energy
+  };
   const unsigned int minNumAtoms = std::min(numAtoms1, numAtoms2);
   constexpr unsigned int const block_size = 128;
   cudaKernelNodeParams kernelNodeParams = {0};

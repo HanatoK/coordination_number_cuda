@@ -10,8 +10,9 @@ void computeCoordinationNumberTwoGroupsCUDA(
   AtomGroupGradientsCUDA& gradient2,
   double inv_r0,
   double* d_energy,
-  cudaGraph_t& graph,
-  cudaStream_t stream);
+  double* h_energy,
+  unsigned int* d_tbcount,
+  cudaGraph_t& graph);
 
 void computeCoordinationNumberTwoGroupsCUDAPairlist(
   const AtomGroupPositionsCUDA& group1,
@@ -20,8 +21,9 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
   AtomGroupGradientsCUDA& gradient2,
   double inv_r0,
   double* d_energy,
+  double* h_energy,
+  unsigned int* d_tbcount,
   cudaGraph_t& graph,
-  cudaStream_t stream,
   bool* pairlist,
   double pairlist_tol,
   bool rebuild_pairlist,

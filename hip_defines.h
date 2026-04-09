@@ -97,6 +97,10 @@
 #define cudaMalloc hipMalloc
 #endif
 
+#ifndef cudaMallocAsync
+#define cudaMallocAsync hipMallocAsync
+#endif
+
 #ifndef cudaMallocHost
 #define cudaMallocHost hipMallocHost
 #endif

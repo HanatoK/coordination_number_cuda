@@ -46,8 +46,9 @@ void computeCoordinationNumberTwoGroups(
       const double x2 = pos2.x[j];
       const double y2 = pos2.y[j];
       const double z2 = pos2.z[j];
-      coordnum<6, 12>(x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei, gx1, gy1, gz1,
-                      gradients2.gx[j], gradients2.gy[j], gradients2.gz[j]);
+      coordnum_pairlist<6, 12, false, false>(
+        x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei, gx1, gy1, gz1,
+        gradients2.gx[j], gradients2.gy[j], gradients2.gz[j], 0, nullptr);
     }
     energy += ei;
     gradients1.gx[i] += gx1;
