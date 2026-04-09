@@ -43,7 +43,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   // Shared memory buffers for atoms in group2
   __shared__ double3 shPosition[group2BatchSize];
   __shared__ double3 shJGrad[numGroup2BatchesPerBlock][group2BatchSize];
-  __shared__ bool shPairlist[block_size][numGroup2BatchesPerBlock][group2BatchSize];
+  __shared__ bool shPairlist[numGroup2BatchesPerBlock][group2BatchSize][block_size];
   __shared__ bool shJMask[group2BatchSize];
   __shared__ bool isLastBlockDone;
   // bool* pairlistStart;
@@ -95,8 +95,9 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
         for (unsigned int t = 0; t < group2BatchSize; ++t) {
           const int jid = k + t;
           const bool mask_jid = jid < numAtoms2;
-          shPairlist[threadIdx.x][group2BatchID][t] =
-            (mask_i && mask_jid) ? pairlist[tid*numAtoms2+jid] : false;
+          shPairlist[group2BatchID][t][threadIdx.x] =
+            // (mask_i && mask_jid) ? pairlist[tid*numAtoms2+jid] : false;
+            (mask_i && mask_jid) ? pairlist[tid+jid*numAtoms1] : false;
         }
       }
 #if defined(USE_CUDA)
@@ -134,7 +135,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
                 shJGrad[group2BatchID][jid].y,
                 shJGrad[group2BatchID][jid].z,
                 pairlist_tol,
-                &shPairlist[threadIdx.x][group2BatchID][jid]);
+                &shPairlist[group2BatchID][jid][threadIdx.x]);
             } else {
               bool p;
               coordnum_pairlist<N, M, use_pairlist, rebuild_pairlist>(
@@ -144,7 +145,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
                 shJGrad[group2BatchID][jid].y,
                 shJGrad[group2BatchID][jid].z,
                 pairlist_tol, &p);
-              shPairlist[threadIdx.x][group2BatchID][jid] = p;
+              shPairlist[group2BatchID][jid][threadIdx.x] = p;
             }
           }
         }
@@ -157,7 +158,8 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
           const bool mask_jid = jid < numAtoms2;
           if (mask_i && mask_jid) {
             // printf("pid = %d, tid = %d\n", tid*numAtoms2+jid, tid);
-            pairlist[tid*numAtoms2+jid] = shPairlist[threadIdx.x][group2BatchID][t];
+            // pairlist[tid*numAtoms2+jid] = shPairlist[threadIdx.x][group2BatchID][t];
+            pairlist[tid+jid*numAtoms1] = shPairlist[group2BatchID][t][threadIdx.x];
           }
         }
       }

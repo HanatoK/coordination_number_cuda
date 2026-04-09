@@ -362,7 +362,7 @@ calculationResult testCoordinationNumberCUDAPairlist(const AtomGroupPositions& p
   checkGPUError(cudaMemcpyAsync(h_pairlist.data(), d_pairlist, sizeof(bool) *pairlist_size, cudaMemcpyDeviceToHost, stream));
   checkGPUError(cudaStreamSynchronize(stream));
 
-  if (cudaPos2.getNumAtoms() > cudaPos1.getNumAtoms()) {
+  if (cudaPos1.getNumAtoms() > cudaPos2.getNumAtoms()) {
     // Transpose the pairlist for comparison
     std::vector<char> h_pairlist_old = h_pairlist;
     const size_t numAtoms1 = cudaPos1.getNumAtoms();
