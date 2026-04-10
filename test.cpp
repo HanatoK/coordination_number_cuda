@@ -486,7 +486,7 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
   cudaStream_t stream;
   checkGPUError(cudaStreamCreate(&stream));
   AtomGroupPositionsCUDA cudaPos1(pos1, stream);
-  computeCoordinationNumberSelfGroupCUDAObject compute;
+  ComputeCoordinationNumberSelfGroupCUDA compute;
   if (testPairlist) {
     compute.initialize(pos1.x.size(), true, 0.1);
   } else {
@@ -497,23 +497,17 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
   AtomGroupGradientsCUDA cudaGradient1UsePairlist;
   cudaGradient1.initialize(cudaPos1.getNumAtoms(), stream);
   cudaGradient1UsePairlist.initialize(cudaPos1.getNumAtoms(), stream);
-  double* d_energy;
-  double* d_energy_pairlist;
-  checkGPUError(cudaMalloc(&d_energy, sizeof(double)));
-  checkGPUError(cudaMemset(d_energy, 0, sizeof(double)));
-  checkGPUError(cudaMalloc(&d_energy_pairlist, sizeof(double)));
-  checkGPUError(cudaMemset(d_energy_pairlist, 0, sizeof(double)));
   double* h_energy;
   checkGPUError(cudaMallocHost((void**)&h_energy, sizeof(double)));
   cudaGraph_t graph;
   checkGPUError(cudaGraphCreate(&graph, 0));
-
-  compute.computeCoordinationNumberSelfGroupCUDA(
+  cudaGraphNode_t node_build_pairlist, node_use_pairlist;
+  compute.addComputeToGraph(
     cudaPos1, cudaGradient1, 1.0 / cutoffDistance,
-    d_energy, true, graph, stream);
-  compute.computeCoordinationNumberSelfGroupCUDA(
+    h_energy, true, node_build_pairlist, {}, graph, stream);
+  compute.addComputeToGraph(
     cudaPos1, cudaGradient1UsePairlist, 1.0 / cutoffDistance,
-    d_energy_pairlist, false, graph, stream);
+    h_energy, false, node_use_pairlist, {node_build_pairlist}, graph, stream);
   cudaGraphExec_t graph_exec;
   cudaGraphInstantiateParams params{0};
   params.flags = cudaGraphInstantiateFlagUpload;
@@ -527,15 +521,10 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
   const auto end = std::chrono::high_resolution_clock::now();
   const std::chrono::duration<double, std::milli> fp_ms = end - start;
 
-  checkGPUError(cudaMemcpyAsync(h_energy, d_energy_pairlist, sizeof(double), cudaMemcpyDeviceToHost, stream));
-  checkGPUError(cudaStreamSynchronize(stream));
-
   std::cout << fmt::format("Coordination number: {:15.7e}, time (GPU) = {:10.5f} ms\n", *h_energy, fp_ms.count());
   const double energy = *h_energy;
   const auto hostGradient1 = cudaGradient1UsePairlist.toHost();
   auto pairlist = compute.pairlistToHost();
-  checkGPUError(cudaFree(d_energy));
-  checkGPUError(cudaFree(d_energy_pairlist));
   checkGPUError(cudaFreeHost(h_energy));
   checkGPUError(cudaGraphDestroy(graph));
   checkGPUError(cudaStreamDestroy(stream));

@@ -11,6 +11,7 @@
 #include <cuda_pipeline.h>
 #elif defined(USE_HIP)
 #include <hipcub/block/block_reduce.hpp>
+#define cub hipcub
 #endif
 
 template <int N, int M, int block_size, int group2BatchSize,
@@ -43,7 +44,10 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   // Shared memory buffers for atoms in group2
   __shared__ double3 shPosition[group2BatchSize];
   __shared__ double3 shJGrad[numGroup2BatchesPerBlock][group2BatchSize];
-  __shared__ bool shPairlist[numGroup2BatchesPerBlock][group2BatchSize][block_size];
+  // __shared__ bool shPairlist[numGroup2BatchesPerBlock][group2BatchSize][block_size];
+  extern __shared__ bool shPairlist_buffer[];
+  bool (&shPairlist)[numGroup2BatchesPerBlock][group2BatchSize][block_size] =
+    *reinterpret_cast<bool (*)[numGroup2BatchesPerBlock][group2BatchSize][block_size]>(shPairlist_buffer);
   __shared__ bool shJMask[group2BatchSize];
   __shared__ bool isLastBlockDone;
   // bool* pairlistStart;
@@ -193,12 +197,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
     isLastBlockDone = false;
   }
   // Reduction for energy
-  __syncthreads();
-#if defined(USE_CUDA)
   typedef cub::BlockReduce<double, block_size> BlockReduce;
-#elif defined(USE_HIP)
-  typedef hipcub::BlockReduce<double, block_size> BlockReduce;
-#endif
   __shared__ typename BlockReduce::TempStorage temp_storage;
   const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
   if (threadIdx.x == 0) {
@@ -213,7 +212,6 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
       *h_energy = *energy;
       *energy = 0;
       tbcount[0] = 0;
-      __threadfence();
     }
   }
 }
@@ -360,7 +358,7 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
   constexpr unsigned int const block_size = 128;
   cudaKernelNodeParams kernelNodeParams = {0};
   kernelNodeParams.blockDim       = dim3(block_size, 1, 1);
-  kernelNodeParams.sharedMemBytes = 0;
+  kernelNodeParams.sharedMemBytes = block_size * block_size * sizeof(bool);
   kernelNodeParams.kernelParams   = args;
   kernelNodeParams.extra          = NULL;
   if (minNumAtoms > 64) {
@@ -430,26 +428,35 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
     dependencies.size(), &kernelNodeParams));
 }
 
-computeCoordinationNumberSelfGroupCUDAObject::~computeCoordinationNumberSelfGroupCUDAObject() {
+ComputeCoordinationNumberSelfGroupCUDA::~ComputeCoordinationNumberSelfGroupCUDA() {
   if (d_tilesList) {
-    cudaFree(d_tilesList);
+    checkGPUError(cudaFree(d_tilesList));
     d_tilesList = nullptr;
   }
   if (d_tilesListStart) {
-    cudaFree(d_tilesListStart);
+    checkGPUError(cudaFree(d_tilesListStart));
     d_tilesListStart = nullptr;
   }
   if (d_tilesListSizes) {
-    cudaFree(d_tilesListSizes);
+    checkGPUError(cudaFree(d_tilesListSizes));
     d_tilesListSizes = nullptr;
   }
   if (d_pairlist) {
-    cudaFree(d_pairlist);
+    checkGPUError(cudaFree(d_pairlist));
     d_pairlist = nullptr;
+  }
+  if (d_tbcount) {
+    checkGPUError(cudaFree(d_tbcount));
+    d_tbcount = nullptr;
+  }
+  if (d_energy_tmp) {
+    checkGPUError(cudaFree(d_energy_tmp));
+    d_energy_tmp = nullptr;
   }
 }
 
-void computeCoordinationNumberSelfGroupCUDAObject::initialize(unsigned int numAtoms, bool usePairlist, double pairlistTolerance) {
+void ComputeCoordinationNumberSelfGroupCUDA::initialize(
+  unsigned int numAtoms, bool usePairlist, double pairlistTolerance) {
   m_usePairlist = usePairlist;
   m_pairlistTolerance = pairlistTolerance;
   if (initialized) {
@@ -457,6 +464,8 @@ void computeCoordinationNumberSelfGroupCUDAObject::initialize(unsigned int numAt
     if (d_tilesListSizes) checkGPUError(cudaFree(d_tilesListSizes));
     if (d_tilesListStart) checkGPUError(cudaFree(d_tilesListStart));
     if (d_pairlist) checkGPUError(cudaFree(d_pairlist));
+    if (d_tbcount) checkGPUError(cudaFree(d_tbcount));
+    if (d_energy_tmp) checkGPUError(cudaFree(d_energy_tmp));
   }
   prepareTilesList(numAtoms);
   if (m_usePairlist) {
@@ -464,10 +473,14 @@ void computeCoordinationNumberSelfGroupCUDAObject::initialize(unsigned int numAt
     checkGPUError(cudaMalloc(&d_pairlist, sizeof(bool) * pairlistSize));
     checkGPUError(cudaMemset(d_pairlist, 1, sizeof(bool) * pairlistSize));
   }
+  checkGPUError(cudaMalloc(&d_tbcount, sizeof(unsigned int)));
+  checkGPUError(cudaMemset(d_tbcount, 0, sizeof(unsigned int)));
+  checkGPUError(cudaMalloc(&d_energy_tmp, sizeof(double)));
+  checkGPUError(cudaMemset(d_energy_tmp, 0, sizeof(double)));
   initialized = true;
 }
 
-void computeCoordinationNumberSelfGroupCUDAObject::prepareTilesList(unsigned int numAtoms) {
+void ComputeCoordinationNumberSelfGroupCUDA::prepareTilesList(unsigned int numAtoms) {
   const unsigned int blockSize = self_group_block_size;
   const unsigned int numTiles = (numAtoms + blockSize - 1) / blockSize;
   std::vector<std::vector<unsigned int>> tilesList(numTiles);
@@ -517,7 +530,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   const double* __restrict pos1z,
   const unsigned int numAtoms1,
   const double inv_r0,
-  double* __restrict energy,
+  double* __restrict energy_tmp,
   double* __restrict gx1,
   double* __restrict gy1,
   double* __restrict gz1,
@@ -525,11 +538,15 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   const unsigned int* __restrict tilesListStart,
   const unsigned int* __restrict tilesListSizes,
   const double pairlist_tol,
-  bool* __restrict pairlist) {
+  bool* __restrict pairlist,
+  unsigned int* __restrict tbcount,
+  double* __restrict energy_out) {
   __shared__ double3 shPosition[block_size];
   __shared__ double3 shJGrad[block_size];
   __shared__ bool mask[block_size];
-  __shared__ unsigned int globalJIDs[use_pairlist ? block_size : 1];
+  // __shared__ unsigned int globalJIDs[use_pairlist ? block_size : 1];
+  extern __shared__ unsigned int globalJIDs[];
+  __shared__ bool isLastBlockDone;
   double ei = 0;
   static constexpr const unsigned int half_block_size = block_size / 2;
   // Number of blocks required to iterate over group1
@@ -541,7 +558,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
     const double y1 = mask_i ? pos1y[tid] : 0;
     const double z1 = mask_i ? pos1z[tid] : 0;
     // unsigned int pair_id_i;
-    if (use_pairlist) {
+    if constexpr (use_pairlist) {
       globalJIDs[threadIdx.x] = tid;
     }
     double3 iGrad{0, 0, 0};
@@ -561,11 +578,11 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       bool pairlist_elem;
       unsigned int jid_global;
       if (mask_i && mask[jid]) {
-        if (use_pairlist) {
+        if constexpr (use_pairlist) {
           jid_global = globalJIDs[jid];
           pairlistID = computeGlobalPairlistIDSelfGroup(tid, jid_global, numAtoms1);
         }
-        if (use_pairlist && !rebuild_pairlist) {
+        if constexpr (use_pairlist && !rebuild_pairlist) {
           pairlist_elem = pairlist[pairlistID];
         }
         const double x2 = shPosition[jid].x;
@@ -579,7 +596,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
           shJGrad[jid].z,
           pairlist_tol,
           &pairlist_elem);
-        if (use_pairlist && rebuild_pairlist) {
+        if constexpr (use_pairlist && rebuild_pairlist) {
           pairlist[pairlistID] = pairlist_elem;
         }
       }
@@ -594,11 +611,11 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       bool pairlist_elem;
       if (jid > threadIdx.x) {
         if (mask_i && mask[jid]) {
-          if (use_pairlist) {
+          if constexpr (use_pairlist) {
             const unsigned int jid_global = globalJIDs[jid];
             pairlistID = computeGlobalPairlistIDSelfGroup(tid, jid_global, numAtoms1);
           }
-          if (use_pairlist && !rebuild_pairlist) {
+          if constexpr (use_pairlist && !rebuild_pairlist) {
             pairlist_elem = pairlist[pairlistID];
           }
           const double x2 = shPosition[jid].x;
@@ -612,7 +629,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
             shJGrad[jid].z,
             pairlist_tol,
             &pairlist_elem);
-          if (use_pairlist && rebuild_pairlist) {
+          if constexpr (use_pairlist && rebuild_pairlist) {
             pairlist[pairlistID] = pairlist_elem;
           }
         }
@@ -646,7 +663,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       shJGrad[threadIdx.x].x = 0;
       shJGrad[threadIdx.x].y = 0;
       shJGrad[threadIdx.x].z = 0;
-      if (use_pairlist) {
+      if constexpr (use_pairlist) {
         globalJIDs[threadIdx.x] = jid_global;
       }
       __syncthreads();
@@ -655,11 +672,11 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
         unsigned int pairlistID;
         bool pairlist_elem;
         if (mask_i && mask[jid]) {
-          if (use_pairlist) {
+          if constexpr (use_pairlist) {
             pairlistID = computeGlobalPairlistIDSelfGroup(
               tid, globalJIDs[jid], numAtoms1);
           }
-          if (use_pairlist && !rebuild_pairlist) {
+          if constexpr (use_pairlist && !rebuild_pairlist) {
             pairlist_elem = pairlist[pairlistID];
           }
           const double x2 = shPosition[jid].x;
@@ -673,7 +690,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
             shJGrad[jid].z,
             pairlist_tol,
             &pairlist_elem);
-          if (use_pairlist && rebuild_pairlist) {
+          if constexpr (use_pairlist && rebuild_pairlist) {
             pairlist[pairlistID] = pairlist_elem;
           }
         }
@@ -691,25 +708,38 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       atomicAdd(&gz1[tid], iGrad.z);
     }
   }
+  if (threadIdx.x == 0) {
+    isLastBlockDone = false;
+  }
+  __syncthreads();
   // Reduction for energy
-#if defined(USE_CUDA)
   typedef cub::BlockReduce<double, block_size> BlockReduce;
-#elif defined(USE_HIP)
-  typedef hipcub::BlockReduce<double, block_size> BlockReduce;
-#endif
   __shared__ typename BlockReduce::TempStorage temp_storage;
   const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
   if (threadIdx.x == 0) {
-    atomicAdd(energy, total_e);
+    atomicAdd(energy_tmp, total_e);
+    __threadfence();
+    unsigned int value = atomicInc(tbcount, gridDim.x);
+    isLastBlockDone = (value == (gridDim.x - 1));
+  }
+  __syncthreads();
+  if (isLastBlockDone) {
+    if (threadIdx.x == 0) {
+      *energy_out = *energy_tmp;
+      *energy_tmp = 0;
+      tbcount[0] = 0;
+    }
   }
 }
 
-void computeCoordinationNumberSelfGroupCUDAObject::computeCoordinationNumberSelfGroupCUDA(
+void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   const AtomGroupPositionsCUDA& group1,
   AtomGroupGradientsCUDA& gradient1,
   double inv_r0,
-  double* d_energy,
+  double* energy_out,
   bool rebuild_pairlist,
+  cudaGraphNode_t& node,
+  const std::vector<cudaGraphNode_t>& dependencies,
   cudaGraph_t& graph,
   cudaStream_t stream) {
   unsigned int numAtoms1 = group1.getNumAtoms();
@@ -723,16 +753,18 @@ void computeCoordinationNumberSelfGroupCUDAObject::computeCoordinationNumberSelf
   void* args[] = {
     &pos1x, &pos1y, &pos1z,
     &numAtoms1,
-    &inv_r0, &d_energy,
+    &inv_r0, &d_energy_tmp,
     &g1x, &g1y, &g1z,
     &d_tilesList,
     &d_tilesListStart,
     &d_tilesListSizes,
     &m_pairlistTolerance,
-    &d_pairlist};
+    &d_pairlist, &d_tbcount,
+    &energy_out};
   cudaKernelNodeParams kernelNodeParams = {0};
   kernelNodeParams.blockDim       = dim3(self_group_block_size, 1, 1);
-  kernelNodeParams.sharedMemBytes = 0;
+  kernelNodeParams.sharedMemBytes = m_usePairlist ?
+    self_group_block_size * sizeof(unsigned int) : 0;
   kernelNodeParams.kernelParams   = args;
   kernelNodeParams.extra          = NULL;
   if (m_usePairlist) {
@@ -756,13 +788,12 @@ void computeCoordinationNumberSelfGroupCUDAObject::computeCoordinationNumberSelf
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
   const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + self_group_block_size - 1) / self_group_block_size);
   kernelNodeParams.gridDim        = dim3(num_blocks, 1, 1);
-  cudaGraphNode_t node;
   checkGPUError(cudaGraphAddKernelNode(
-    &node, graph, NULL,
-    0, &kernelNodeParams));
+    &node, graph, dependencies.data(),
+    dependencies.size(), &kernelNodeParams));
 }
 
-std::vector<char> computeCoordinationNumberSelfGroupCUDAObject::pairlistToHost() const {
+std::vector<char> ComputeCoordinationNumberSelfGroupCUDA::pairlistToHost() const {
   std::vector<char> out(pairlistSize);
   if (pairlistSize > 0) checkGPUError(cudaMemcpy(out.data(), d_pairlist, sizeof(char) * pairlistSize, cudaMemcpyDeviceToHost));
   return out;

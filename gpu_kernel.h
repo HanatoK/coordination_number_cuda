@@ -30,17 +30,19 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
   cudaGraphNode_t& node,
   const std::vector<cudaGraphNode_t>& dependencies);
 
-class computeCoordinationNumberSelfGroupCUDAObject {
+class ComputeCoordinationNumberSelfGroupCUDA {
 public:
-  computeCoordinationNumberSelfGroupCUDAObject() {}
-  ~computeCoordinationNumberSelfGroupCUDAObject();
+  ComputeCoordinationNumberSelfGroupCUDA() {}
+  ~ComputeCoordinationNumberSelfGroupCUDA();
   void initialize(unsigned int numAtoms, bool usePairlist = false, double pairlistTolerance = 0);
-  void computeCoordinationNumberSelfGroupCUDA(
+  void addComputeToGraph(
     const AtomGroupPositionsCUDA& group1,
     AtomGroupGradientsCUDA& gradient1,
     double inv_r0,
-    double* d_energy,
+    double* energy_out,
     bool rebuild_pairlist,
+    cudaGraphNode_t& node,
+    const std::vector<cudaGraphNode_t>& dependencies,
     cudaGraph_t& graph,
     cudaStream_t stream);
   // For debug
@@ -57,6 +59,8 @@ private:
   size_t pairlistSize = 0;
   bool* d_pairlist = nullptr;
   double m_pairlistTolerance = 0;
+  unsigned int* d_tbcount = nullptr;
+  double* d_energy_tmp = nullptr;
 };
 
 #endif // GPU_KERNEL_H
