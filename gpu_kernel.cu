@@ -27,7 +27,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   const unsigned int numAtoms1,
   const unsigned int numAtoms2,
   const double inv_r0,
-  double* __restrict energy,
+  double* __restrict energy_tmp,
   double* __restrict gx1,
   double* __restrict gy1,
   double* __restrict gz1,
@@ -37,7 +37,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   const double pairlist_tol,
   bool* __restrict pairlist,
   unsigned int* __restrict tbcount,
-  double* __restrict h_energy) {
+  double* __restrict energy_out) {
   // TODO: Figure out a way to remove this limitation
   static_assert(block_size == group2BatchSize * numGroup2BatchesPerBlock,
                 "block_size != group2BatchSize * numGroup2BatchesPerBlock");
@@ -201,7 +201,7 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   __shared__ typename BlockReduce::TempStorage temp_storage;
   const double total_e = BlockReduce(temp_storage).Sum(ei); __syncthreads();
   if (threadIdx.x == 0) {
-    atomicAdd(energy, total_e);
+    atomicAdd(energy_tmp, total_e);
     __threadfence();
     unsigned int value = atomicInc(tbcount, gridDim.x);
     isLastBlockDone = (value == (gridDim.x - 1));
@@ -209,127 +209,84 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   __syncthreads();
   if (isLastBlockDone) {
     if (threadIdx.x == 0) {
-      *h_energy = *energy;
-      *energy = 0;
+      *energy_out = *energy_tmp;
+      *energy_tmp = 0;
       tbcount[0] = 0;
     }
   }
 }
 
-void computeCoordinationNumberTwoGroupsCUDA(
+void ComputeCoordinationNumberTwoGroups::initialize(
+  unsigned int numAtoms1, unsigned int numAtoms2,
+  bool usePairlist, double pairlistTolerance) {
+  m_numAtoms1 = numAtoms1;
+  m_numAtoms2 = numAtoms2;
+  if (initialized) {
+    if (d_tbcount) checkGPUError(cudaFree(d_tbcount));
+    if (d_pairlist) checkGPUError(cudaFree(d_pairlist));
+    if (d_energy_tmp) checkGPUError(cudaFree(d_energy_tmp));
+  }
+  m_usePairlist = usePairlist;
+  if (usePairlist) {
+    pairlistSize = m_numAtoms1 * m_numAtoms2;
+    m_pairlistTolerance = pairlistTolerance;
+    pairlistTransposed = m_numAtoms1 > m_numAtoms2;
+    checkGPUError(cudaMalloc(&d_pairlist, pairlistSize * sizeof(bool)));
+    checkGPUError(cudaMemset(d_pairlist, 0, pairlistSize * sizeof(bool)));
+  } else {
+    pairlistSize = 0;
+    m_pairlistTolerance = 0;
+    pairlistTransposed = false;
+  }
+  checkGPUError(cudaMalloc(&d_energy_tmp, sizeof(double)));
+  checkGPUError(cudaMemset(d_energy_tmp, 0, sizeof(double)));
+  checkGPUError(cudaMalloc(&d_tbcount, sizeof(unsigned int)));
+  checkGPUError(cudaMemset(d_tbcount, 0, sizeof(unsigned int)));
+  initialized = true;
+}
+
+ComputeCoordinationNumberTwoGroups::~ComputeCoordinationNumberTwoGroups() {
+  if (d_tbcount) checkGPUError(cudaFree(d_tbcount));
+  if (d_pairlist) checkGPUError(cudaFree(d_pairlist));
+  if (d_energy_tmp) checkGPUError(cudaFree(d_energy_tmp));
+  d_tbcount = nullptr;
+  d_pairlist = nullptr;
+  d_energy_tmp = nullptr;
+}
+
+std::vector<char>ComputeCoordinationNumberTwoGroups::pairlistToHost() const {
+  std::vector<char> out(pairlistSize);
+  if (pairlistSize > 0) checkGPUError(cudaMemcpy(
+    out.data(), d_pairlist, sizeof(char) * pairlistSize, cudaMemcpyDeviceToHost));
+  if (pairlistSize > 0 && pairlistTransposed) {
+    // Transpose the pairlist for comparison
+    std::vector<char> h_pairlist_old = out;
+    for (size_t i = 0; i < m_numAtoms1; ++i) {
+      for (size_t j = 0; j < m_numAtoms2; ++j) {
+        out[i*m_numAtoms2+j] = h_pairlist_old[j*m_numAtoms1+i];
+      }
+    }
+  }
+  return out;
+}
+
+void ComputeCoordinationNumberTwoGroups::addComputeToGraph(
   const AtomGroupPositionsCUDA& group1,
   const AtomGroupPositionsCUDA& group2,
   AtomGroupGradientsCUDA& gradient1,
   AtomGroupGradientsCUDA& gradient2,
   double inv_r0,
-  double* d_energy,
-  double* h_energy,
-  unsigned int* d_tbcount,
+  double* energy_out,
+  bool rebuild_pairlist,
+  cudaGraphNode_t& node,
+  const std::vector<cudaGraphNode_t>& dependencies,
   cudaGraph_t& graph) {
   unsigned int numAtoms1 = group1.getNumAtoms();
   unsigned int numAtoms2 = group2.getNumAtoms();
   if (numAtoms2 > numAtoms1) {
-    computeCoordinationNumberTwoGroupsCUDA(
-      group2, group1, gradient2, gradient1, inv_r0, d_energy, h_energy, d_tbcount, graph);
-    return;
-  }
-  const double* pos1x = group1.getDeviceX();
-  const double* pos1y = group1.getDeviceY();
-  const double* pos1z = group1.getDeviceZ();
-  const double* pos2x = group2.getDeviceX();
-  const double* pos2y = group2.getDeviceY();
-  const double* pos2z = group2.getDeviceZ();
-  double* g1x = gradient1.getDeviceX();
-  double* g1y = gradient1.getDeviceY();
-  double* g1z = gradient1.getDeviceZ();
-  double* g2x = gradient2.getDeviceX();
-  double* g2y = gradient2.getDeviceY();
-  double* g2z = gradient2.getDeviceZ();
-  double pairlist_tol = 0;
-  bool* pairlist = nullptr;
-  void* args[] = {
-    &pos1x, &pos1y, &pos1z,
-    &pos2x, &pos2y, &pos2z,
-    &numAtoms1, &numAtoms2,
-    &inv_r0, &d_energy,
-    &g1x, &g1y, &g1z,
-    &g2x, &g2y, &g2z,
-    &pairlist_tol, &pairlist,
-    &d_tbcount, &h_energy};
-  const unsigned int minNumAtoms = std::min(numAtoms1, numAtoms2);
-  // I'm not sure if it's necessary to limit the number of blocks
-  // constexpr const unsigned int maxNumBlocks = 65536;
-  constexpr unsigned int const block_size = 128;
-  cudaKernelNodeParams kernelNodeParams = {0};
-  kernelNodeParams.blockDim       = dim3(block_size, 1, 1);
-  kernelNodeParams.sharedMemBytes = 0;
-  kernelNodeParams.kernelParams   = args;
-  kernelNodeParams.extra          = NULL;
-  if (minNumAtoms > 64) {
-    constexpr unsigned int const group2WorkSize = 64;
-    kernelNodeParams.func =
-      (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-        6, 12, block_size, group2WorkSize, block_size / group2WorkSize, false, false>;
-  } else if (minNumAtoms > 16) {
-    constexpr unsigned int const group2WorkSize = 16;
-    kernelNodeParams.func =
-      (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-        6, 12, block_size, group2WorkSize, block_size / group2WorkSize, false, false>;
-  } else {
-    constexpr unsigned int const group2WorkSize = 8;
-    kernelNodeParams.func =
-      (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-      6, 12, block_size, group2WorkSize, block_size / group2WorkSize, false, false>;
-  }
-  // Occupancy calculator
-  int num_blocks_occ;
-  int deviceID = 0;
-  int multiProcessorCount;
-  checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks_occ, kernelNodeParams.func, block_size, 0));
-  checkGPUError(cudaGetDevice(&deviceID));
-  checkGPUError(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, deviceID));
-  cudaDeviceProp props = {0};
-  checkGPUError(cudaGetDeviceProperties(&props, deviceID));
-  char busID[256];
-  checkGPUError(cudaDeviceGetPCIBusId(busID, 256, deviceID));
-  std::cout << "GPU Name: " << props.name << ", PCI Bus ID: " << busID;
-#if defined(USE_HIP)
-  std::cout << ", GCN Arch Name: " << props.gcnArchName;
-#endif
-  std::cout << std::endl;
-  // From CUDA samples
-  const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
-  const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + block_size - 1) / block_size);
-  kernelNodeParams.gridDim        = dim3(num_blocks, 1, 1);
-
-  cudaGraphNode_t node;
-  checkGPUError(cudaGraphAddKernelNode(
-    &node, graph, NULL,
-    0, &kernelNodeParams));
-}
-
-void computeCoordinationNumberTwoGroupsCUDAPairlist(
-  const AtomGroupPositionsCUDA& group1,
-  const AtomGroupPositionsCUDA& group2,
-  AtomGroupGradientsCUDA& gradient1,
-  AtomGroupGradientsCUDA& gradient2,
-  double inv_r0,
-  double* d_energy,
-  double* h_energy,
-  unsigned int* d_tbcount,
-  cudaGraph_t& graph,
-  bool* pairlist,
-  double pairlist_tol,
-  bool rebuild_pairlist,
-  cudaGraphNode_t& node,
-  const std::vector<cudaGraphNode_t>& dependencies) {
-  unsigned int numAtoms1 = group1.getNumAtoms();
-  unsigned int numAtoms2 = group2.getNumAtoms();
-  if (numAtoms2 > numAtoms1) {
-    computeCoordinationNumberTwoGroupsCUDAPairlist(
+    addComputeToGraph(
       group2, group1, gradient2, gradient1, inv_r0,
-      d_energy, h_energy, d_tbcount, graph,
-      pairlist, pairlist_tol, rebuild_pairlist, node, dependencies);
+      energy_out, rebuild_pairlist, node, dependencies, graph);
     return;
   }
   const double* pos1x = group1.getDeviceX();
@@ -348,64 +305,50 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
     &pos1x, &pos1y, &pos1z,
     &pos2x, &pos2y, &pos2z,
     &numAtoms1, &numAtoms2,
-    &inv_r0, &d_energy,
+    &inv_r0, &d_energy_tmp,
     &g1x, &g1y, &g1z,
     &g2x, &g2y, &g2z,
-    &pairlist_tol, &pairlist,
-    &d_tbcount, &h_energy
-  };
+    &m_pairlistTolerance, &d_pairlist,
+    &d_tbcount, &energy_out};
   const unsigned int minNumAtoms = std::min(numAtoms1, numAtoms2);
-  constexpr unsigned int const block_size = 128;
   cudaKernelNodeParams kernelNodeParams = {0};
-  kernelNodeParams.blockDim       = dim3(block_size, 1, 1);
-  kernelNodeParams.sharedMemBytes = block_size * block_size * sizeof(bool);
+  kernelNodeParams.blockDim       = dim3(default_block_size, 1, 1);
+  kernelNodeParams.sharedMemBytes = m_usePairlist ? default_block_size * default_block_size * sizeof(bool) : 0;
   kernelNodeParams.kernelParams   = args;
   kernelNodeParams.extra          = NULL;
-  if (minNumAtoms > 64) {
-    constexpr unsigned int const group2WorkSize = 64;
-    if (rebuild_pairlist) {
-      kernelNodeParams.func =
-      (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-        6, 12, block_size, group2WorkSize,
-        block_size / group2WorkSize, true, true>;
-    } else {
-      kernelNodeParams.func =
-        (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-          6, 12, block_size, group2WorkSize,
-          block_size / group2WorkSize, true, false>;
-    }
+#define FUNC_CALL(GROUP2WORKSIZE) \
+  do {\
+    if (m_usePairlist) { \
+      if (rebuild_pairlist) {\
+        kernelNodeParams.func = (void*)computeCoordinationNumberTwoGroupsCUDAKernel1< \
+          6, 12, default_block_size, GROUP2WORKSIZE, default_block_size / GROUP2WORKSIZE, true, true>; \
+      } else { \
+        kernelNodeParams.func = (void*)computeCoordinationNumberTwoGroupsCUDAKernel1< \
+          6, 12, default_block_size, GROUP2WORKSIZE, default_block_size / GROUP2WORKSIZE, true, false>; \
+      } \
+    } else {\
+      kernelNodeParams.func = (void*)computeCoordinationNumberTwoGroupsCUDAKernel1< \
+        6, 12, default_block_size, GROUP2WORKSIZE, default_block_size / GROUP2WORKSIZE, false, false>; \
+    } \
+  } while (0);
+  if (minNumAtoms > 128) {
+    FUNC_CALL(128);
+  } else if (minNumAtoms > 64) {
+    FUNC_CALL(64);
+  } else if (minNumAtoms > 32) {
+    FUNC_CALL(32);
   } else if (minNumAtoms > 16) {
-    constexpr unsigned int const group2WorkSize = 16;
-    if (rebuild_pairlist) {
-      kernelNodeParams.func =
-      (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-        6, 12, block_size, group2WorkSize,
-        block_size / group2WorkSize, true, true>;
-    } else {
-      kernelNodeParams.func =
-        (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-          6, 12, block_size, group2WorkSize,
-          block_size / group2WorkSize, true, false>;
-    }
-  } else {
-    constexpr unsigned int const group2WorkSize = 8;
-    if (rebuild_pairlist) {
-      kernelNodeParams.func =
-      (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-        6, 12, block_size, group2WorkSize,
-        block_size / group2WorkSize, true, true>;
-    } else {
-      kernelNodeParams.func =
-        (void*)computeCoordinationNumberTwoGroupsCUDAKernel1<
-          6, 12, block_size, group2WorkSize,
-          block_size / group2WorkSize, true, false>;
-    }
+    FUNC_CALL(16);
+  } else if (minNumAtoms > 8) {
+    FUNC_CALL(8);
   }
+#undef FUNC_CALL
   // Occupancy calculator
   int num_blocks_occ;
   int deviceID = 0;
   int multiProcessorCount;
-  checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks_occ, kernelNodeParams.func, block_size, 0));
+  checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+    &num_blocks_occ, kernelNodeParams.func, default_block_size, kernelNodeParams.sharedMemBytes));
   checkGPUError(cudaGetDevice(&deviceID));
   checkGPUError(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, deviceID));
   cudaDeviceProp props = {0};
@@ -413,15 +356,11 @@ void computeCoordinationNumberTwoGroupsCUDAPairlist(
   char busID[256];
   checkGPUError(cudaDeviceGetPCIBusId(busID, 256, deviceID));
   std::cout << "GPU Name: " << props.name << ", PCI Bus ID: " << busID;
-#if defined(USE_HIP)
-  std::cout << ", GCN Arch Name: " << props.gcnArchName;
-#endif
   std::cout << std::endl;
   // From CUDA samples
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
-  const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + block_size - 1) / block_size);
+  const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + default_block_size - 1) / default_block_size);
   kernelNodeParams.gridDim        = dim3(num_blocks, 1, 1);
-
   // cudaGraphNode_t node;
   checkGPUError(cudaGraphAddKernelNode(
     &node, graph, dependencies.data(),
@@ -781,7 +720,8 @@ void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   int deviceID = 0;
   int num_blocks_occ;
   int multiProcessorCount;
-  checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks_occ, kernelNodeParams.func, self_group_block_size, 0));
+  checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+    &num_blocks_occ, kernelNodeParams.func, self_group_block_size, kernelNodeParams.sharedMemBytes));
   checkGPUError(cudaGetDevice(&deviceID));
   checkGPUError(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, deviceID));
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
