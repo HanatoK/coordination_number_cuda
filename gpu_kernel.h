@@ -43,8 +43,7 @@ public:
     bool rebuild_pairlist,
     cudaGraphNode_t& node,
     const std::vector<cudaGraphNode_t>& dependencies,
-    cudaGraph_t& graph,
-    cudaStream_t stream);
+    cudaGraph_t& graph);
   // For debug
   std::vector<char> pairlistToHost() const;
 private:

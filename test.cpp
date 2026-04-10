@@ -496,7 +496,9 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
   AtomGroupGradientsCUDA cudaGradient1;
   AtomGroupGradientsCUDA cudaGradient1UsePairlist;
   cudaGradient1.initialize(cudaPos1.getNumAtoms(), stream);
-  cudaGradient1UsePairlist.initialize(cudaPos1.getNumAtoms(), stream);
+  if (testPairlist) {
+    cudaGradient1UsePairlist.initialize(cudaPos1.getNumAtoms(), stream);
+  }
   double* h_energy;
   checkGPUError(cudaMallocHost((void**)&h_energy, sizeof(double)));
   cudaGraph_t graph;
@@ -504,10 +506,12 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
   cudaGraphNode_t node_build_pairlist, node_use_pairlist;
   compute.addComputeToGraph(
     cudaPos1, cudaGradient1, 1.0 / cutoffDistance,
-    h_energy, true, node_build_pairlist, {}, graph, stream);
-  compute.addComputeToGraph(
-    cudaPos1, cudaGradient1UsePairlist, 1.0 / cutoffDistance,
-    h_energy, false, node_use_pairlist, {node_build_pairlist}, graph, stream);
+    h_energy, true, node_build_pairlist, {}, graph);
+  if (testPairlist) {
+    compute.addComputeToGraph(
+      cudaPos1, cudaGradient1UsePairlist, 1.0 / cutoffDistance,
+      h_energy, false, node_use_pairlist, {node_build_pairlist}, graph);
+  }
   cudaGraphExec_t graph_exec;
   cudaGraphInstantiateParams params{0};
   params.flags = cudaGraphInstantiateFlagUpload;
@@ -523,8 +527,8 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
 
   std::cout << fmt::format("Coordination number: {:15.7e}, time (GPU) = {:10.5f} ms\n", *h_energy, fp_ms.count());
   const double energy = *h_energy;
-  const auto hostGradient1 = cudaGradient1UsePairlist.toHost();
-  auto pairlist = compute.pairlistToHost();
+  const auto hostGradient1 = testPairlist ? cudaGradient1UsePairlist.toHost() :cudaGradient1.toHost();
+  const auto pairlist = compute.pairlistToHost();
   checkGPUError(cudaFreeHost(h_energy));
   checkGPUError(cudaGraphDestroy(graph));
   checkGPUError(cudaStreamDestroy(stream));

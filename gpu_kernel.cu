@@ -740,8 +740,7 @@ void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   bool rebuild_pairlist,
   cudaGraphNode_t& node,
   const std::vector<cudaGraphNode_t>& dependencies,
-  cudaGraph_t& graph,
-  cudaStream_t stream) {
+  cudaGraph_t& graph) {
   unsigned int numAtoms1 = group1.getNumAtoms();
   if (numAtoms1 < 2) return;
   const double* pos1x = group1.getDeviceX();
