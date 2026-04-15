@@ -339,7 +339,7 @@ void ComputeCoordinationNumberTwoGroups::addComputeToGraph(
     FUNC_CALL(32);
   } else if (minNumAtoms > 16) {
     FUNC_CALL(16);
-  } else if (minNumAtoms > 8) {
+  } else {
     FUNC_CALL(8);
   }
 #undef FUNC_CALL
