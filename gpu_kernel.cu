@@ -9,8 +9,10 @@
 #if defined(USE_CUDA)
 #include <cub/block/block_reduce.cuh>
 #include <cuda_pipeline.h>
+#include <cooperative_groups.h>
 #elif defined(USE_HIP)
 #include <hipcub/block/block_reduce.hpp>
+#include <hip/hip_cooperative_groups.h>
 #define cub hipcub
 #endif
 
@@ -41,6 +43,12 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   // TODO: Figure out a way to remove this limitation
   static_assert(block_size == group2BatchSize * numGroup2BatchesPerBlock,
                 "block_size != group2BatchSize * numGroup2BatchesPerBlock");
+#if defined (USE_CG_SYNC)
+  namespace cg = cooperative_groups;
+  __shared__ cg::block_tile_memory<block_size> shared;
+  cg::thread_block thb = cg::this_thread_block(shared);
+  auto group2Tile = cg::tiled_partition<group2BatchSize>(thb);
+#endif
   // Shared memory buffers for atoms in group2
   __shared__ double3 shPosition[group2BatchSize];
   __shared__ double3 shJGrad[numGroup2BatchesPerBlock][group2BatchSize];
@@ -58,8 +66,13 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
   // Number of blocks required to iterate over group2
   const unsigned int numBatchesInGroup2 = (numAtoms2 + group2BatchSize - 1) / group2BatchSize;
   const unsigned int group2WorkSize = numBatchesInGroup2 * group2BatchSize;
+#if defined (USE_CG_SYNC)
+  const unsigned int group2BatchID = group2Tile.meta_group_rank();
+  const unsigned int group2LaneID = group2Tile.thread_rank();
+#else
   const unsigned int group2BatchID = threadIdx.x / group2BatchSize;
   const unsigned int group2LaneID = threadIdx.x % group2BatchSize;
+#endif // USE_CG_SYNC
   for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
     const unsigned int tid = i * blockDim.x + threadIdx.x;
     // Load the atom i from group1
@@ -100,14 +113,17 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
           const int jid = k + t;
           const bool mask_jid = jid < numAtoms2;
           shPairlist[group2BatchID][t][threadIdx.x] =
-            // (mask_i && mask_jid) ? pairlist[tid*numAtoms2+jid] : false;
             (mask_i && mask_jid) ? pairlist[tid+jid*numAtoms1] : false;
         }
       }
 #if defined(USE_CUDA)
       __pipeline_wait_prior(0);
 #endif
+#if defined (USE_CG_SYNC)
+      thb.sync();
+#else
       __syncthreads();
+#endif // USE_CG_SYNC
       #pragma unroll
       for (unsigned int t = 0; t < group2BatchSize; ++t) {
         // Since we need to store the interaction gradient into the
@@ -153,8 +169,16 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
             }
           }
         }
+#if defined (USE_CG_SYNC)
+        // TODO: USE_CG_SYNC is significantly slower. Why?
+        // __syncthreads();
+        group2Tile.sync();
+      }
+      thb.sync();
+#else
         __syncthreads();
       }
+#endif
       if constexpr (use_pairlist && rebuild_pairlist) {
         #pragma unroll
         for (unsigned int t = 0; t < group2BatchSize; ++t) {
@@ -175,7 +199,11 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
           shJGrad[group2BatchID][group2LaneID].y += shJGrad[group2BatchID + l][group2LaneID].y;
           shJGrad[group2BatchID][group2LaneID].z += shJGrad[group2BatchID + l][group2LaneID].z;
         }
+#if defined (USE_CG_SYNC)
+        thb.sync();
+#else
         __syncthreads();
+#endif // USE_CG_SYNC
       }
       if (group2BatchID == 0) {
         if (shJMask[group2LaneID]) {
@@ -184,7 +212,11 @@ __global__ void computeCoordinationNumberTwoGroupsCUDAKernel1(
           atomicAdd(&gz2[j], shJGrad[0][group2LaneID].z);
         }
       }
+#if defined (USE_CG_SYNC)
+      thb.sync();
+#else
       __syncthreads();
+#endif // USE_CG_SYNC
     }
     if (mask_i) {
       // Save the i-gradients to group1
