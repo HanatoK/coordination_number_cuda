@@ -14,8 +14,22 @@ if(NOT DEFINED CMAKE_CUDA_STANDARD)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
-find_package(fmt REQUIRED)
-find_package(CLI11 REQUIRED)
+include(FetchContent)
+
+FetchContent_Declare(
+  fmt
+  GIT_REPOSITORY https://github.com/fmtlib/fmt
+  GIT_TAG        e69e5f977d458f2650bb346dadf2ad30c5320281) # 10.2.1
+FetchContent_MakeAvailable(fmt)
+
+FetchContent_Declare(
+  cli11
+  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+  GIT_TAG v2.6.2
+)
+FetchContent_MakeAvailable(cli11)
+
+# find_package(CLI11 REQUIRED)
 
 if(USE_CUDA)
   find_package(CUDAToolkit REQUIRED)
@@ -29,7 +43,7 @@ if(USE_CUDA)
   set(coordination_number_cuda_bin "${PROJECT_NAME}_cuda")
   add_executable(${coordination_number_cuda_bin} common.h common.cpp gpu_kernel.h gpu_kernel.cu test.cpp)
   set_property(TARGET ${coordination_number_cuda_bin} PROPERTY LANGUAGE CUDA)
-  target_link_libraries(${coordination_number_cuda_bin} PRIVATE CUDA::cudart CUDA::nvtx3 fmt)
+  target_link_libraries(${coordination_number_cuda_bin} PRIVATE CUDA::cudart CUDA::nvtx3 fmt::fmt CLI11::CLI11)
 endif()
 
 if(USE_HIP)
@@ -48,6 +62,6 @@ if(USE_HIP)
   set_source_files_properties(test.cpp PROPERTIES LANGUAGE CXX)
   set_source_files_properties(gpu_kernel.cu PROPERTIES LANGUAGE HIP)
   add_executable(${coordination_number_hip_bin} common.h common.cpp gpu_kernel.h hip_defines.h gpu_kernel.cu test.cpp)
-  target_link_libraries(${coordination_number_hip_bin} PRIVATE hip::device hip::host fmt)
+  target_link_libraries(${coordination_number_hip_bin} PRIVATE hip::device hip::host fmt::fmt CLI11::CLI11)
 endif()
 
