@@ -105,8 +105,16 @@
 #define cudaMallocAsync hipMallocAsync
 #endif
 
-#ifndef cudaMallocHost
-#define cudaMallocHost hipMallocHost
+#ifndef cudaHostAlloc
+#define cudaHostAlloc hipHostAlloc
+#endif
+
+#ifndef cudaHostAllocMapped
+#define cudaHostAllocMapped hipHostAllocMapped
+#endif
+
+#ifndef cudaHostGetDevicePointer
+#define cudaHostGetDevicePointer hipHostGetDevicePointer
 #endif
 
 #ifndef cudaMemcpy

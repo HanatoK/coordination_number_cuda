@@ -389,6 +389,20 @@ void ComputeCoordinationNumberTwoGroups::addComputeToGraph(
   checkGPUError(cudaDeviceGetPCIBusId(busID, 256, deviceID));
   std::cout << "GPU Name: " << props.name << ", PCI Bus ID: " << busID;
   std::cout << std::endl;
+#if defined (USE_CUDA)
+  int concurrentManagedAccess;
+  int pageableMemoryAccess;
+  int pageableMemoryAccessUsesHostPageTables;
+  int directManagedMemAccessFromHost;
+  checkGPUError(cudaDeviceGetAttribute(&concurrentManagedAccess, cudaDevAttrConcurrentManagedAccess, deviceID));
+  checkGPUError(cudaDeviceGetAttribute(&pageableMemoryAccess, cudaDevAttrPageableMemoryAccess, deviceID));
+  checkGPUError(cudaDeviceGetAttribute(&pageableMemoryAccessUsesHostPageTables, cudaDevAttrPageableMemoryAccessUsesHostPageTables, deviceID));
+  checkGPUError(cudaDeviceGetAttribute(&directManagedMemAccessFromHost, cudaDevAttrDirectManagedMemAccessFromHost, deviceID));
+  std::cout << "GPU attribute: cudaDevAttrConcurrentManagedAccess = " << concurrentManagedAccess << std::endl;
+  std::cout << "GPU attribute: cudaDevAttrPageableMemoryAccess = " << pageableMemoryAccess << std::endl;
+  std::cout << "GPU attribute: cudaDevAttrPageableMemoryAccessUsesHostPageTables = " << pageableMemoryAccessUsesHostPageTables << std::endl;
+  std::cout << "GPU attribute: cudaDevAttrDirectManagedMemAccessFromHost = " << directManagedMemAccessFromHost << std::endl;
+#endif
   // From CUDA samples
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
   const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + default_block_size - 1) / default_block_size);

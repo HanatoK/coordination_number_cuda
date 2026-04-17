@@ -229,7 +229,7 @@ calculationResult testCoordinationNumberCUDA(
   cudaGradient1.initialize(cudaPos1.getNumAtoms(), stream);
   cudaGradient2.initialize(cudaPos2.getNumAtoms(), stream);
   double* h_energy;
-  checkGPUError(cudaMallocHost((void**)&h_energy, sizeof(double)));
+  checkGPUError(cudaHostAlloc((void**)&h_energy, sizeof(double), cudaHostAllocMapped));
   ComputeCoordinationNumberTwoGroups compute;
   const double pairlistTolerance = testPairlist ? 0.1 : 0;
   compute.initialize(
@@ -415,7 +415,7 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
     cudaGradient1UsePairlist.initialize(cudaPos1.getNumAtoms(), stream);
   }
   double* h_energy;
-  checkGPUError(cudaMallocHost((void**)&h_energy, sizeof(double)));
+  checkGPUError(cudaHostAlloc((void**)&h_energy, sizeof(double), cudaHostAllocMapped));
   cudaGraph_t graph;
   checkGPUError(cudaGraphCreate(&graph, 0));
   cudaGraphNode_t node_build_pairlist, node_use_pairlist;

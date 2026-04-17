@@ -56,9 +56,9 @@ private:
 public:
   AtomGroupPositionsCUDA(): d_x(nullptr), d_y(nullptr), d_z(nullptr), numAtoms(0), /*atomStorageSize(0),*/ stream(0) {}
   ~AtomGroupPositionsCUDA() {
-    if (d_x) cudaFree(d_x);
-    if (d_y) cudaFree(d_y);
-    if (d_z) cudaFree(d_z);
+    if (d_x) checkGPUError(cudaFree(d_x));
+    if (d_y) checkGPUError(cudaFree(d_y));
+    if (d_z) checkGPUError(cudaFree(d_z));
   }
   AtomGroupPositionsCUDA(const AtomGroupPositions& hostPositions, cudaStream_t stream_in, size_t clusterSize = 1) {
     numAtoms = hostPositions.x.size();
@@ -87,9 +87,9 @@ private:
 public:
   AtomGroupGradientsCUDA(): d_gx(nullptr), d_gy(nullptr), d_gz(nullptr), numAtoms(0), /*atomStorageSize(0),*/ stream(0) {}
   ~AtomGroupGradientsCUDA() {
-    if (d_gx) cudaFree(d_gx);
-    if (d_gy) cudaFree(d_gy);
-    if (d_gz) cudaFree(d_gz);
+    if (d_gx) checkGPUError(cudaFree(d_gx));
+    if (d_gy) checkGPUError(cudaFree(d_gy));
+    if (d_gz) checkGPUError(cudaFree(d_gz));
   }
   void initialize(size_t numAtomsInput, cudaStream_t stream_in, size_t clusterSize = 1) {
     numAtoms = numAtomsInput;
