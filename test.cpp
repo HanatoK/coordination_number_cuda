@@ -298,6 +298,7 @@ calculationResult testCoordinationNumberCUDA(
     energy, fp_ms.count());
   const auto hostGradient1 = cudaGradient1.toHost();
   const auto hostGradient2 = cudaGradient2.toHost();
+  checkGPUError(cudaStreamSynchronize(stream));
   // writeToFile(hostGradient1.fx,
   //             hostGradient1.fy,
   //             hostGradient1.fz,
@@ -444,6 +445,7 @@ calculationResult testCoordinationNumberSelfCUDA(const AtomGroupPositions& pos1,
   const double energy = *h_energy;
   const auto hostGradient1 = testPairlist ? cudaGradient1UsePairlist.toHost() :cudaGradient1.toHost();
   const auto pairlist = compute.pairlistToHost();
+  checkGPUError(cudaStreamSynchronize(stream));
   checkGPUError(cudaFreeHost(h_energy));
   checkGPUError(cudaGraphDestroy(graph));
   checkGPUError(cudaStreamDestroy(stream));

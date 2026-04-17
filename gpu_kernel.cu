@@ -556,6 +556,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
     shJGrad[threadIdx.x].y = 0;
     shJGrad[threadIdx.x].z = 0;
     __syncthreads();
+    #pragma unroll
     for (unsigned int t = 1; t < half_block_size; ++t) {
       // NAMD/OpenMM style swizzling
       const unsigned int jid = (t + threadIdx.x) & (block_size - 1);
@@ -652,6 +653,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
         globalJIDs[threadIdx.x] = jid_global;
       }
       __syncthreads();
+      #pragma unroll
       for (unsigned int t = 0; t < block_size; ++t) {
         const unsigned int jid = t ^ threadIdx.x;
         unsigned int pairlistID;

@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
 include(CheckIncludeFile)
+include(FetchContent)
 project(coordination_number LANGUAGES CXX)
 
 option(USE_CUDA "Use the CUDA library (if your want to run NAMD on NVIDIA GPUs)" ON)
@@ -14,20 +15,26 @@ if(NOT DEFINED CMAKE_CUDA_STANDARD)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
-include(FetchContent)
+find_package(fmt)
 
-FetchContent_Declare(
-  fmt
-  GIT_REPOSITORY https://github.com/fmtlib/fmt
-  GIT_TAG        e69e5f977d458f2650bb346dadf2ad30c5320281) # 10.2.1
-FetchContent_MakeAvailable(fmt)
+if(NOT fmt_FOUND)
+  FetchContent_Declare(
+    fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt
+    GIT_TAG        e69e5f977d458f2650bb346dadf2ad30c5320281) # 10.2.1
+  FetchContent_MakeAvailable(fmt)
+endif()
 
-FetchContent_Declare(
-  cli11
-  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-  GIT_TAG v2.6.2
-)
-FetchContent_MakeAvailable(cli11)
+find_package(CLI11)
+
+if(NOT CLI11_FOUND)
+  FetchContent_Declare(
+    cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG v2.6.2
+  )
+  FetchContent_MakeAvailable(cli11)
+endif()
 
 # find_package(CLI11 REQUIRED)
 

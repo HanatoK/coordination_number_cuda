@@ -27,16 +27,58 @@ int gpuAssert(cudaError_t code, const char *file, int line);
 
 #define checkGPUError(ans) gpuAssert((ans), __FILE__, __LINE__);
 
+/**
+ * @brief Allocator for pinned host memory using cudaHostAlloc
+ *
+ * This allocator can be used with STL containers to allocate pinned
+ * host memory that is page-locked and directly accessible by the GPU.
+ *
+ * @tparam T The type of elements to allocate
+ */
+template <typename T>
+class CudaHostAllocator {
+public:
+  using value_type = T;
+
+  CudaHostAllocator() = default;
+
+  template<typename U>
+  constexpr CudaHostAllocator(const CudaHostAllocator<U>&) noexcept {}
+
+  friend bool operator==(const CudaHostAllocator&, const CudaHostAllocator&) { return true; }
+  friend bool operator!=(const CudaHostAllocator&, const CudaHostAllocator&) { return false; }
+
+  T* allocate(size_t n) {
+    T* ptr;
+    if (cudaHostAlloc(&ptr, n * sizeof(T), cudaHostAllocMapped) != cudaSuccess) {
+      throw std::bad_alloc();
+    }
+    return ptr;
+  }
+  void deallocate(T* ptr, size_t n) noexcept {
+    (void)cudaFreeHost(ptr);
+  }
+  template<typename U, typename... Args>
+  void construct(U* p, Args&&... args) {
+      new(p) U(std::forward<Args>(args)...);
+  }
+
+  template<typename U>
+  void destroy(U* p) noexcept {
+      p->~U();
+  }
+};
+
 struct AtomGroupPositions {
-  std::vector<double> x;
-  std::vector<double> y;
-  std::vector<double> z;
+  std::vector<double, CudaHostAllocator<double>> x;
+  std::vector<double, CudaHostAllocator<double>> y;
+  std::vector<double, CudaHostAllocator<double>> z;
 };
 
 struct AtomGroupGradients {
-  std::vector<double> gx;
-  std::vector<double> gy;
-  std::vector<double> gz;
+  std::vector<double, CudaHostAllocator<double>> gx;
+  std::vector<double, CudaHostAllocator<double>> gy;
+  std::vector<double, CudaHostAllocator<double>> gz;
 };
 
 void writeToFile(
