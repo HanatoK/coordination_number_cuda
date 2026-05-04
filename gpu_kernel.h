@@ -41,7 +41,7 @@ private:
 
 class ComputeCoordinationNumberSelfGroupCUDA {
 public:
-  ComputeCoordinationNumberSelfGroupCUDA() {}
+  ComputeCoordinationNumberSelfGroupCUDA(unsigned int self_group_block_size_in = 128);
   ~ComputeCoordinationNumberSelfGroupCUDA();
   void initialize(unsigned int numAtoms, bool usePairlist = false, double pairlistTolerance = 0);
   void addComputeToGraph(
@@ -55,10 +55,13 @@ public:
     cudaGraph_t& graph);
   // For debug
   std::vector<char> pairlistToHost() const;
+  unsigned int getBlockSize() const {return self_group_block_size;}
 private:
   void prepareTilesList(unsigned int numAtoms);
 private:
-  static constexpr const unsigned int self_group_block_size = 128;
+  // static constexpr const unsigned int self_group_block_size = 128;
+  inline static constexpr unsigned int self_group_block_size_supported[] = {32, 64, 128, 256};
+  unsigned int self_group_block_size;
   unsigned int* d_tilesList = nullptr;
   unsigned int* d_tilesListStart = nullptr;
   unsigned int* d_tilesListSizes = nullptr;

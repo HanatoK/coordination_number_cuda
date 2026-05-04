@@ -719,6 +719,18 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   }
 }
 
+ComputeCoordinationNumberSelfGroupCUDA::ComputeCoordinationNumberSelfGroupCUDA(unsigned int self_group_block_size_in) {
+  self_group_block_size = self_group_block_size_in;
+  auto it = std::find(
+    std::cbegin(self_group_block_size_supported),
+    std::cend(self_group_block_size_supported),
+    self_group_block_size);
+  if (it == std::cend(self_group_block_size_supported)) {
+    const std::string error = fmt::format("Unsupported block size: {}\n", self_group_block_size);
+    throw error;
+  }
+}
+
 void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   const AtomGroupPositionsCUDA& group1,
   AtomGroupGradientsCUDA& gradient1,
@@ -752,19 +764,28 @@ void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   kernelNodeParams.sharedMemBytes = m_usePairlist ?
     self_group_block_size * sizeof(unsigned int) : 0;
   kernelNodeParams.kernelParams   = args;
-  kernelNodeParams.extra          = NULL;
-  if (m_usePairlist) {
-    if (rebuild_pairlist) {
-      kernelNodeParams.func           =
-        (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, self_group_block_size, true, true>;
-    } else {
-      kernelNodeParams.func           =
-        (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, self_group_block_size, true, false>;
-    }
-  } else {
-    kernelNodeParams.func           =
-      (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, self_group_block_size, false, false>;
+  kernelNodeParams.extra          = nullptr;
+  kernelNodeParams.func           = nullptr;
+#define SET_KERNEL(N) \
+  if (self_group_block_size_supported[N] == self_group_block_size) {                   \
+    if (m_usePairlist) {                                                               \
+      if (rebuild_pairlist) {                                                          \
+        kernelNodeParams.func           =                                              \
+          (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, self_group_block_size_supported[N], true, true>;  \
+      } else {                                                                         \
+        kernelNodeParams.func           =                                              \
+          (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, self_group_block_size_supported[N], true, false>; \
+      }                                                                                \
+    } else {                                                                           \
+      kernelNodeParams.func           =                                                \
+        (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, self_group_block_size_supported[N], false, false>;  \
+    }                                                                                  \
   }
+  SET_KERNEL(0);
+  SET_KERNEL(1);
+  SET_KERNEL(2);
+  SET_KERNEL(3);
+#undef SET_KERNEL
   int deviceID = 0;
   int num_blocks_occ;
   int multiProcessorCount;
