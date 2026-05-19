@@ -629,14 +629,17 @@ void ComputeCoordinationNumberTwoGroups::addComputeToGraph(
   int pageableMemoryAccess;
   int pageableMemoryAccessUsesHostPageTables;
   int directManagedMemAccessFromHost;
+  int hostNativeAtomicSupported;
   checkGPUError(cudaDeviceGetAttribute(&concurrentManagedAccess, cudaDevAttrConcurrentManagedAccess, deviceID));
   checkGPUError(cudaDeviceGetAttribute(&pageableMemoryAccess, cudaDevAttrPageableMemoryAccess, deviceID));
   checkGPUError(cudaDeviceGetAttribute(&pageableMemoryAccessUsesHostPageTables, cudaDevAttrPageableMemoryAccessUsesHostPageTables, deviceID));
   checkGPUError(cudaDeviceGetAttribute(&directManagedMemAccessFromHost, cudaDevAttrDirectManagedMemAccessFromHost, deviceID));
+  checkGPUError(cudaDeviceGetAttribute(&hostNativeAtomicSupported, cudaDevAttrHostNativeAtomicSupported, deviceID));
   std::cout << "GPU attribute: cudaDevAttrConcurrentManagedAccess = " << concurrentManagedAccess << std::endl;
   std::cout << "GPU attribute: cudaDevAttrPageableMemoryAccess = " << pageableMemoryAccess << std::endl;
   std::cout << "GPU attribute: cudaDevAttrPageableMemoryAccessUsesHostPageTables = " << pageableMemoryAccessUsesHostPageTables << std::endl;
   std::cout << "GPU attribute: cudaDevAttrDirectManagedMemAccessFromHost = " << directManagedMemAccessFromHost << std::endl;
+  std::cout << "GPU attribute: cudaDevAttrHostNativeAtomicSupported = " << hostNativeAtomicSupported << std::endl;
 #endif
   // From CUDA samples
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
@@ -794,14 +797,17 @@ void ComputeCoordinationNumberTwoGroups2::addComputeToGraph(
   int pageableMemoryAccess;
   int pageableMemoryAccessUsesHostPageTables;
   int directManagedMemAccessFromHost;
+  int hostNativeAtomicSupported;
   checkGPUError(cudaDeviceGetAttribute(&concurrentManagedAccess, cudaDevAttrConcurrentManagedAccess, deviceID));
   checkGPUError(cudaDeviceGetAttribute(&pageableMemoryAccess, cudaDevAttrPageableMemoryAccess, deviceID));
   checkGPUError(cudaDeviceGetAttribute(&pageableMemoryAccessUsesHostPageTables, cudaDevAttrPageableMemoryAccessUsesHostPageTables, deviceID));
   checkGPUError(cudaDeviceGetAttribute(&directManagedMemAccessFromHost, cudaDevAttrDirectManagedMemAccessFromHost, deviceID));
+  checkGPUError(cudaDeviceGetAttribute(&hostNativeAtomicSupported, cudaDevAttrHostNativeAtomicSupported, deviceID));
   std::cout << "GPU attribute: cudaDevAttrConcurrentManagedAccess = " << concurrentManagedAccess << std::endl;
   std::cout << "GPU attribute: cudaDevAttrPageableMemoryAccess = " << pageableMemoryAccess << std::endl;
   std::cout << "GPU attribute: cudaDevAttrPageableMemoryAccessUsesHostPageTables = " << pageableMemoryAccessUsesHostPageTables << std::endl;
   std::cout << "GPU attribute: cudaDevAttrDirectManagedMemAccessFromHost = " << directManagedMemAccessFromHost << std::endl;
+  std::cout << "GPU attribute: cudaDevAttrHostNativeAtomicSupported = " << hostNativeAtomicSupported << std::endl;
 #endif
   // From CUDA samples
   const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
