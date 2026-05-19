@@ -181,9 +181,10 @@ void computeCoordinationNumberSelfGroupInterpolate(
 
 #ifdef NO_BUILTIN_SHUFFLEVECTOR
 namespace {
-inline vector_ext::v4sd __builtin_shufflevector(vector_ext::v4sd& x1, vector_ext::v4sd& x2, int i1, int i2, int i3, int i4) {
+template <typename T>
+inline T __builtin_shufflevector(T& x1, T& x2, int i1, int i2, int i3, int i4) {
   (void)x2;
-  return vector_ext::v4sd{x1[i1], x1[i2], x1[i3], x1[i4]};
+  return T{x1[i1], x1[i2], x1[i3], x1[i4]};
 }
 }
 #endif
