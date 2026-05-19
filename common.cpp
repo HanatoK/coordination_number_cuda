@@ -171,6 +171,23 @@ void computeCoordinationNumberSelfGroupInterpolate(
   }
 }
 
+#if defined (__has_builtin)
+#if !(__has_builtin (__builtin_shufflevector))
+#define NO_BUILTIN_SHUFFLEVECTOR
+#endif
+#else
+#define NO_BUILTIN_SHUFFLEVECTOR
+#endif
+
+#ifdef NO_BUILTIN_SHUFFLEVECTOR
+namespace {
+inline vector_ext::v4sd __builtin_shufflevector(vector_ext::v4sd& x1, vector_ext::v4sd& x2, int i1, int i2, int i3, int i4) {
+  (void)x2;
+  return vector_ext::v4sd{x1[i1], x1[i2], x1[i3], x1[i4]};
+}
+}
+#endif
+
 void computeCoordinationNumberSelfGroup2(
   const AtomGroupPositions& __restrict pos1,
   double inv_r0,
