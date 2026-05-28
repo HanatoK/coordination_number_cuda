@@ -931,11 +931,6 @@ __inline__ __device__ size_t computeGlobalPairlistIDSelfGroup(size_t iid_global,
   return iid * (2 * numAtoms - 1 - iid) / 2 + (jid - iid - 1);
 }
 
-template <unsigned int tileSize>
-__inline__ __device__ void syncTile() {
-  __syncwarp((1<<tileSize)-1);
-}
-
 // WARNING: To match the CPU data layout, the GPU pairlist implementation is very inefficient!
 template <
   unsigned int N, unsigned int M, unsigned int blockSize,
