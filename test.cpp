@@ -511,11 +511,11 @@ calculationResult testCoordinationNumberSelfPairlist(const AtomGroupPositions& p
 
 calculationResult testCoordinationNumberSelfCUDA(
   const AtomGroupPositions& pos1, double cutoffDistance,
-  bool testPairlist = false, unsigned int block_size = 128) {
+  bool testPairlist = false, unsigned int block_size = 128, unsigned int tile_size = 16) {
   cudaStream_t stream;
   checkGPUError(cudaStreamCreate(&stream));
   AtomGroupPositionsCUDA cudaPos1(pos1, stream);
-  ComputeCoordinationNumberSelfGroupCUDA compute(block_size);
+  ComputeCoordinationNumberSelfGroupCUDA compute(block_size, tile_size);
   if (testPairlist) {
     compute.initialize(pos1.x.size(), true, 0.1);
   } else {
@@ -640,6 +640,9 @@ int main(int argc, char* argv[]) {
   unsigned int self_group_block_size = 128;
   app.add_option("--self_group_block_size", self_group_block_size, "Self group block size (supported options: 32, 64, 128, 256)");
 
+  unsigned int self_group_tile_size = 16;
+  app.add_option("--self_group_tile_size", self_group_tile_size, "Self group tile size (supported options: 8, 16, 32)");
+
   bool test_pairlist = false;
   app.add_flag("--pairlist", test_pairlist, "Use pairlist for testing");
 
@@ -678,7 +681,7 @@ int main(int argc, char* argv[]) {
     double cutoffDistance = 6.0;
     if (!test_pairlist) {
       const auto cpuResult = testCoordinationNumberSelf(pos1, cutoffDistance);
-      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, false, self_group_block_size);
+      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, false, self_group_block_size, self_group_tile_size);
 #ifdef TRY_INTERP
       const auto cpuResultInterp = testCoordinationNumberSelfInterp(pos1, cutoffDistance);
 #endif
@@ -688,7 +691,7 @@ int main(int argc, char* argv[]) {
 #endif
     } else {
       const auto cpuResult = testCoordinationNumberSelfPairlist(pos1, cutoffDistance);
-      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, true, self_group_block_size);
+      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, true, self_group_block_size, self_group_tile_size);
       compareResults(cpuResult, gpuResult, false);
     }
   }
