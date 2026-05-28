@@ -1260,7 +1260,7 @@ void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   checkGPUError(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
     &num_blocks_occ, kernelNodeParams.func, getBlockSize(), kernelNodeParams.sharedMemBytes));
   checkGPUError(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, deviceID));
-  const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount * 2;
+  const unsigned int maxNumBlocks = num_blocks_occ * multiProcessorCount;
   const unsigned int num_blocks = std::min(maxNumBlocks, (numAtoms1 + getBlockSize() - 1) / getBlockSize());
   kernelNodeParams.gridDim        = dim3(num_blocks, 1, 1);
   checkGPUError(cudaGraphAddKernelNode(
