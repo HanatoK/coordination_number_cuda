@@ -953,9 +953,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   unsigned int* __restrict tbcount,
   double* __restrict energy_out) {
   constexpr unsigned int numTilesPerBlock = blockSize / tileSize;
-  __shared__ double3 shPosition[numTilesPerBlock][tileSize];
   __shared__ double3 shJGrad[numTilesPerBlock][tileSize];
-  __shared__ bool mask[numTilesPerBlock][tileSize];
   extern __shared__ unsigned int globalJIDs_buffer[];
   unsigned int (&globalJIDs)[numTilesPerBlock][tileSize] =
     *reinterpret_cast<unsigned int (*)[numTilesPerBlock][tileSize]>(globalJIDs_buffer);
@@ -982,15 +980,10 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       const double y1 = mask_i ? pos1y[tid] : 0;
       const double z1 = mask_i ? pos1z[tid] : 0;
       double3 iGrad{0, 0, 0};
-      // unsigned int pair_id_i;
       if constexpr (use_pairlist) {
         globalJIDs[tileIndexInBlock][threadIndexInTile] = tid;
       }
       // Self tile
-      mask[tileIndexInBlock][threadIndexInTile] = mask_i;
-      shPosition[tileIndexInBlock][threadIndexInTile].x = x1;
-      shPosition[tileIndexInBlock][threadIndexInTile].y = y1;
-      shPosition[tileIndexInBlock][threadIndexInTile].z = z1;
       shJGrad[tileIndexInBlock][threadIndexInTile].x = 0;
       shJGrad[tileIndexInBlock][threadIndexInTile].y = 0;
       shJGrad[tileIndexInBlock][threadIndexInTile].z = 0;
@@ -1000,10 +993,14 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       for (unsigned int t = 1; t < half_tile_size; ++t) {
         // NAMD/OpenMM style swizzling
         const unsigned int jid = (t + threadIndexInTile) & (tileSize - 1);
+        const bool mask_t = tilePartition.shfl(mask_i, jid);
         unsigned int pairlistID;
         bool pairlist_elem;
         unsigned int jid_global;
-        if (mask_i && mask[tileIndexInBlock][jid]) {
+        const double x2 = tilePartition.shfl(x1, jid);
+        const double y2 = tilePartition.shfl(y1, jid);
+        const double z2 = tilePartition.shfl(z1, jid);
+        if (mask_i && mask_t) {
           if constexpr (use_pairlist) {
             jid_global = globalJIDs[tileIndexInBlock][jid];
             pairlistID = computeGlobalPairlistIDSelfGroup(tid, jid_global, numAtoms1);
@@ -1011,9 +1008,6 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
           if constexpr (use_pairlist && !rebuild_pairlist) {
             pairlist_elem = pairlist[pairlistID];
           }
-          const double x2 = shPosition[tileIndexInBlock][jid].x;
-          const double y2 = shPosition[tileIndexInBlock][jid].y;
-          const double z2 = shPosition[tileIndexInBlock][jid].z;
           coordnum_pairlist<N, M, use_pairlist, rebuild_pairlist>(
             x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
             iGrad.x, iGrad.y, iGrad.z,
@@ -1035,8 +1029,12 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
         const unsigned int jid = (half_tile_size + threadIndexInTile) & (tileSize - 1);
         unsigned int pairlistID;
         bool pairlist_elem;
+        const bool mask_t = tilePartition.shfl(mask_i, jid);
+        const double x2 = tilePartition.shfl(x1, jid);
+        const double y2 = tilePartition.shfl(y1, jid);
+        const double z2 = tilePartition.shfl(z1, jid);
         if (jid > threadIndexInTile) {
-          if (mask_i && mask[tileIndexInBlock][jid]) {
+          if (mask_i && mask_t) {
             if constexpr (use_pairlist) {
               const unsigned int jid_global = globalJIDs[tileIndexInBlock][jid];
               pairlistID = computeGlobalPairlistIDSelfGroup(tid, jid_global, numAtoms1);
@@ -1044,9 +1042,6 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
             if constexpr (use_pairlist && !rebuild_pairlist) {
               pairlist_elem = pairlist[pairlistID];
             }
-            const double x2 = shPosition[tileIndexInBlock][jid].x;
-            const double y2 = shPosition[tileIndexInBlock][jid].y;
-            const double z2 = shPosition[tileIndexInBlock][jid].z;
             coordnum_pairlist<N, M, use_pairlist, rebuild_pairlist>(
               x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
               iGrad.x, iGrad.y, iGrad.z,
@@ -1073,18 +1068,13 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       const unsigned int numJTiles = tilesListSizes[iTileIndexInGrid];
       const unsigned int jTileEnd = jTileStart + numJTiles;
       for (unsigned int l = jTileStart; l < jTileEnd; ++l) {
-        bool mask_j;
-        unsigned int jid_global;
         const unsigned int jTileIndex = tilesList[l];
         // Fetch atom j from i-tile
-        jid_global = jTileIndex * tileSize + threadIndexInTile;
-        mask_j = jid_global < numAtoms1;
-        if (mask_j) {
-          shPosition[tileIndexInBlock][threadIndexInTile].x = pos1x[jid_global];
-          shPosition[tileIndexInBlock][threadIndexInTile].y = pos1y[jid_global];
-          shPosition[tileIndexInBlock][threadIndexInTile].z = pos1z[jid_global];
-        }
-        mask[tileIndexInBlock][threadIndexInTile] = mask_j;
+        const unsigned int jid_global = jTileIndex * tileSize + threadIndexInTile;
+        const bool mask_j = jid_global < numAtoms1;
+        const double jx2 = mask_j ? pos1x[jid_global] : 0;
+        const double jy2 = mask_j ? pos1y[jid_global] : 0;
+        const double jz2 = mask_j ? pos1z[jid_global] : 0;
         // Reset the gradients
         shJGrad[tileIndexInBlock][threadIndexInTile].x = 0;
         shJGrad[tileIndexInBlock][threadIndexInTile].y = 0;
@@ -1096,9 +1086,13 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
         #pragma unroll
         for (unsigned int t = 0; t < tileSize; ++t) {
           const unsigned int jid = t ^ threadIndexInTile;
+          const bool mask_t = tilePartition.shfl(mask_j, jid);
           unsigned int pairlistID;
           bool pairlist_elem;
-          if (mask_i && mask[tileIndexInBlock][jid]) {
+          const double x2 = tilePartition.shfl(jx2, jid);
+          const double y2 = tilePartition.shfl(jy2, jid);
+          const double z2 = tilePartition.shfl(jz2, jid);
+          if (mask_i && mask_t) {
             if constexpr (use_pairlist) {
               pairlistID = computeGlobalPairlistIDSelfGroup(
                 tid, globalJIDs[tileIndexInBlock][jid], numAtoms1);
@@ -1106,9 +1100,6 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
             if constexpr (use_pairlist && !rebuild_pairlist) {
               pairlist_elem = pairlist[pairlistID];
             }
-            const double x2 = shPosition[tileIndexInBlock][jid].x;
-            const double y2 = shPosition[tileIndexInBlock][jid].y;
-            const double z2 = shPosition[tileIndexInBlock][jid].z;
             coordnum_pairlist<N, M, use_pairlist, rebuild_pairlist>(
               x1, x2, y1, y2, z1, z2, inv_r0, inv_r0, inv_r0, ei,
               iGrad.x, iGrad.y, iGrad.z,
