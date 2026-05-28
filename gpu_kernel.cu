@@ -939,7 +939,7 @@ __inline__ __device__ void syncTile() {
 
 // WARNING: To match the CPU data layout, the GPU pairlist implementation is very inefficient!
 template <
-  unsigned int N, unsigned int M, unsigned int blockSize, unsigned int t_warpSize,
+  unsigned int N, unsigned int M, unsigned int blockSize,
   unsigned int tileSize, bool use_pairlist, bool rebuild_pairlist>
 __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   const double* __restrict pos1x,
@@ -962,8 +962,6 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   __shared__ double3 shPosition[numTilesPerBlock][tileSize];
   __shared__ double3 shJGrad[numTilesPerBlock][tileSize];
   __shared__ bool mask[numTilesPerBlock][tileSize];
-  // __shared__ unsigned int shITileIndex[numTilesPerBlock];
-  // __shared__ unsigned int globalJIDs[use_pairlist ? block_size : 1];
   extern __shared__ unsigned int globalJIDs_buffer[];
   unsigned int (&globalJIDs)[numTilesPerBlock][tileSize] =
     *reinterpret_cast<unsigned int (*)[numTilesPerBlock][tileSize]>(globalJIDs_buffer);
@@ -973,40 +971,39 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   // Number of blocks required to iterate over group1
   const unsigned int numBlocksInGroup1 = (numAtoms1 + blockSize - 1) / blockSize;
   const unsigned int numTilesInGroup1 = (numAtoms1 + tileSize - 1) / tileSize;
-  // Which tile is the current thread working on?
-  const unsigned int tileIndexInBlock = threadIdx.x / tileSize;
-  // The thread id in a tile
-  const unsigned int threadIndexInTile = threadIdx.x % tileSize;
   namespace cg = cooperative_groups;
-  cg::thread_block thb = cg::this_thread_block();
-  auto warpPartition = cg::tiled_partition<t_warpSize>(thb);
-  // auto tilePartition = cg::tiled_partition<tileSize>(thb);
+  const cg::thread_block thb = cg::this_thread_block();
+  const auto tilePartition = cg::tiled_partition<tileSize>(thb);
+  // Which tile is the current thread working on?
+  const unsigned int tileIndexInBlock = tilePartition.meta_group_rank();
+  // The thread id in a tile
+  const unsigned int threadIndexInTile = tilePartition.thread_rank();
   for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
     unsigned int iTileIndexInGrid = i * numTilesPerBlock + tileIndexInBlock;
-    bool isItileValid = iTileIndexInGrid < numTilesInGroup1;
-    const unsigned int tid = i * blockDim.x + threadIdx.x;
-    const bool mask_i = tid < numAtoms1;
-    const double x1 = mask_i ? pos1x[tid] : 0;
-    const double y1 = mask_i ? pos1y[tid] : 0;
-    const double z1 = mask_i ? pos1z[tid] : 0;
-    double3 iGrad{0, 0, 0};
-    // unsigned int pair_id_i;
-    if constexpr (use_pairlist) {
-      globalJIDs[tileIndexInBlock][threadIndexInTile] = tid;
-    }
-    // Self tile
-    mask[tileIndexInBlock][threadIndexInTile] = mask_i;
-    shPosition[tileIndexInBlock][threadIndexInTile].x = x1;
-    shPosition[tileIndexInBlock][threadIndexInTile].y = y1;
-    shPosition[tileIndexInBlock][threadIndexInTile].z = z1;
-    shJGrad[tileIndexInBlock][threadIndexInTile].x = 0;
-    shJGrad[tileIndexInBlock][threadIndexInTile].y = 0;
-    shJGrad[tileIndexInBlock][threadIndexInTile].z = 0;
-    warpPartition.sync();
-    // Self tiles
-    #pragma unroll
-    for (unsigned int t = 1; t < half_tile_size; ++t) {
-      if (isItileValid) {
+    const bool isItileValid = iTileIndexInGrid < numTilesInGroup1;
+    if (isItileValid) {
+      const unsigned int tid = i * blockDim.x + threadIdx.x;
+      const bool mask_i = tid < numAtoms1;
+      const double x1 = mask_i ? pos1x[tid] : 0;
+      const double y1 = mask_i ? pos1y[tid] : 0;
+      const double z1 = mask_i ? pos1z[tid] : 0;
+      double3 iGrad{0, 0, 0};
+      // unsigned int pair_id_i;
+      if constexpr (use_pairlist) {
+        globalJIDs[tileIndexInBlock][threadIndexInTile] = tid;
+      }
+      // Self tile
+      mask[tileIndexInBlock][threadIndexInTile] = mask_i;
+      shPosition[tileIndexInBlock][threadIndexInTile].x = x1;
+      shPosition[tileIndexInBlock][threadIndexInTile].y = y1;
+      shPosition[tileIndexInBlock][threadIndexInTile].z = z1;
+      shJGrad[tileIndexInBlock][threadIndexInTile].x = 0;
+      shJGrad[tileIndexInBlock][threadIndexInTile].y = 0;
+      shJGrad[tileIndexInBlock][threadIndexInTile].z = 0;
+      tilePartition.sync();
+      // Self tiles
+      #pragma unroll
+      for (unsigned int t = 1; t < half_tile_size; ++t) {
         // NAMD/OpenMM style swizzling
         const unsigned int jid = (t + threadIndexInTile) & (tileSize - 1);
         unsigned int pairlistID;
@@ -1036,17 +1033,14 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
           }
         }
         // Assume tileSize < warpSize
+        tilePartition.sync();
       }
-      warpPartition.sync();
-    }
-
-    // Last loop: t == block_size / 2
-    {
-      // NAMD/OpenMM style swizzling
-      const unsigned int jid = (half_tile_size + threadIndexInTile) & (tileSize - 1);
-      unsigned int pairlistID;
-      bool pairlist_elem;
-      if (isItileValid) {
+      // Last loop: t == block_size / 2
+      {
+        // NAMD/OpenMM style swizzling
+        const unsigned int jid = (half_tile_size + threadIndexInTile) & (tileSize - 1);
+        unsigned int pairlistID;
+        bool pairlist_elem;
         if (jid > threadIndexInTile) {
           if (mask_i && mask[tileIndexInBlock][jid]) {
             if constexpr (use_pairlist) {
@@ -1072,30 +1066,22 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
             }
           }
         }
+        tilePartition.sync();
       }
-      warpPartition.sync();
-    }
-
-    if (isItileValid) {
       if (mask_i) {
         atomicAdd(&gx1[tid], shJGrad[tileIndexInBlock][threadIndexInTile].x);
         atomicAdd(&gy1[tid], shJGrad[tileIndexInBlock][threadIndexInTile].y);
         atomicAdd(&gz1[tid], shJGrad[tileIndexInBlock][threadIndexInTile].z);
       }
-    }
-
-    // Iterate over other tiles
-    const unsigned int jTileStart = isItileValid ? tilesListStart[iTileIndexInGrid] : 0;
-    const unsigned int numJTiles = isItileValid ? tilesListSizes[iTileIndexInGrid] : 0;
-    const unsigned int jTileEnd = jTileStart + numJTiles;
-    const unsigned int maxNumJTilesInWarp = cg::reduce(warpPartition, numJTiles, cg::greater<unsigned int>());
-    warpPartition.sync();
-    for (unsigned int l = 0; l < maxNumJTilesInWarp; ++l) {
-      const bool jTileValid = (jTileStart + l < jTileEnd) && isItileValid;
-      bool mask_j;
-      unsigned int jid_global;
-      if (jTileValid) {
-        const unsigned int jTileIndex = tilesList[jTileStart + l];
+      tilePartition.sync();
+      // Iterate over other tiles
+      const unsigned int jTileStart = tilesListStart[iTileIndexInGrid];
+      const unsigned int numJTiles = tilesListSizes[iTileIndexInGrid];
+      const unsigned int jTileEnd = jTileStart + numJTiles;
+      for (unsigned int l = jTileStart; l < jTileEnd; ++l) {
+        bool mask_j;
+        unsigned int jid_global;
+        const unsigned int jTileIndex = tilesList[l];
         // Fetch atom j from i-tile
         jid_global = jTileIndex * tileSize + threadIndexInTile;
         mask_j = jid_global < numAtoms1;
@@ -1112,11 +1098,9 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
         if constexpr (use_pairlist) {
           globalJIDs[tileIndexInBlock][threadIndexInTile] = jid_global;
         }
-      }
-      warpPartition.sync();
-      #pragma unroll
-      for (unsigned int t = 0; t < tileSize; ++t) {
-        if (jTileValid) {
+        tilePartition.sync();
+        #pragma unroll
+        for (unsigned int t = 0; t < tileSize; ++t) {
           const unsigned int jid = t ^ threadIndexInTile;
           unsigned int pairlistID;
           bool pairlist_elem;
@@ -1143,22 +1127,21 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
               pairlist[pairlistID] = pairlist_elem;
             }
           }
+          tilePartition.sync();
         }
-        warpPartition.sync();
-      }
-      if (jTileValid) {
         if (mask_j) {
           atomicAdd(&gx1[jid_global], shJGrad[tileIndexInBlock][threadIndexInTile].x);
           atomicAdd(&gy1[jid_global], shJGrad[tileIndexInBlock][threadIndexInTile].y);
           atomicAdd(&gz1[jid_global], shJGrad[tileIndexInBlock][threadIndexInTile].z);
         }
       }
+      if (mask_i) {
+        atomicAdd(&gx1[tid], iGrad.x);
+        atomicAdd(&gy1[tid], iGrad.y);
+        atomicAdd(&gz1[tid], iGrad.z);
+      }
     }
-    if (mask_i) {
-      atomicAdd(&gx1[tid], iGrad.x);
-      atomicAdd(&gy1[tid], iGrad.y);
-      atomicAdd(&gz1[tid], iGrad.z);
-    }
+    // __syncthreads();
   }
   if (threadIdx.x == 0) {
     isLastBlockDone = false;
@@ -1245,48 +1228,25 @@ void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   int warpSize;
   checkGPUError(cudaDeviceGetAttribute(&warpSize, cudaDevAttrWarpSize, deviceID));
 #define SET_KERNEL(N1, N2) \
-  switch (warpSize) { \
-    case 32: if (selfGroupBlockSizeSupported[N1] == getBlockSize()) {                   \
-      if (m_usePairlist) {                                                               \
-        if (rebuild_pairlist) {                                                          \
-          if (tileSizeSupported[N2] == tileSize) {\
-            kernelNodeParams.func =                                              \
-              (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], 32, tileSizeSupported[N2], true, true>;  \
-          }  \
-        } else {                                                                         \
-          if (tileSizeSupported[N2] == tileSize) {\
-            kernelNodeParams.func =                                              \
-              (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], 32, tileSizeSupported[N2], true, false>;  \
-          } \
-        }                                                                                \
-      } else {                                                                           \
+  if (selfGroupBlockSizeSupported[N1] == getBlockSize()) {                   \
+    if (m_usePairlist) {                                                               \
+      if (rebuild_pairlist) {                                                          \
         if (tileSizeSupported[N2] == tileSize) {\
           kernelNodeParams.func =                                              \
-            (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], 32, tileSizeSupported[N2], false, false>;  \
-        } \
-      }                                                                                  \
-    } break; \
-    case 64: if (selfGroupBlockSizeSupported[N1] == getBlockSize()) {                   \
-      if (m_usePairlist) {                                                               \
-        if (rebuild_pairlist) {                                                          \
-          if (tileSizeSupported[N2] == tileSize) {\
-            kernelNodeParams.func =                                              \
-              (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], 32, tileSizeSupported[N2], true, true>;  \
-          }  \
-        } else {                                                                         \
-          if (tileSizeSupported[N2] == tileSize) {\
-            kernelNodeParams.func =                                              \
-              (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], 32, tileSizeSupported[N2], true, false>;  \
-          } \
-        }                                                                                \
-      } else {                                                                           \
+            (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], tileSizeSupported[N2], true, true>;  \
+        }  \
+      } else {                                                                         \
         if (tileSizeSupported[N2] == tileSize) {\
           kernelNodeParams.func =                                              \
-            (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], 32, tileSizeSupported[N2], false, false>;  \
+            (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], tileSizeSupported[N2], true, false>;  \
         } \
-      }                                                                                  \
-    } break; \
-    default: {throw "Unsupported warpSize";} \
+      }                                                                                \
+    } else {                                                                           \
+      if (tileSizeSupported[N2] == tileSize) {\
+        kernelNodeParams.func =                                              \
+          (void*)computeCoordinationNumberSelfGroupCUDAKernel1<6, 12, selfGroupBlockSizeSupported[N1], tileSizeSupported[N2], false, false>;  \
+      } \
+    }                                                                                  \
   }
   SET_KERNEL(0, 0);
   SET_KERNEL(0, 1);
