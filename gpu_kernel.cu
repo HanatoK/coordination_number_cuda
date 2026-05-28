@@ -10,7 +10,6 @@
 #include <cub/block/block_reduce.cuh>
 #include <cuda_pipeline.h>
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
 #elif defined(USE_HIP)
 #include <hipcub/block/block_reduce.hpp>
 #include <hip/hip_cooperative_groups.h>
@@ -1225,8 +1224,8 @@ void ComputeCoordinationNumberSelfGroupCUDA::addComputeToGraph(
   kernelNodeParams.func           = nullptr;
   int deviceID = 0;
   checkGPUError(cudaGetDevice(&deviceID));
-  int warpSize;
-  checkGPUError(cudaDeviceGetAttribute(&warpSize, cudaDevAttrWarpSize, deviceID));
+  // int warpSize;
+  // checkGPUError(cudaDeviceGetAttribute(&warpSize, cudaDevAttrWarpSize, deviceID));
 #define SET_KERNEL(N1, N2) \
   if (selfGroupBlockSizeSupported[N1] == getBlockSize()) {                   \
     if (m_usePairlist) {                                                               \
