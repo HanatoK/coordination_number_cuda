@@ -892,37 +892,34 @@ void ComputeCoordinationNumberSelfGroupCUDA::initialize(
 
 void ComputeCoordinationNumberSelfGroupCUDA::prepareTilesList(unsigned int numAtoms) {
   const unsigned int numTiles = (numAtoms + tileSize - 1) / tileSize;
-  std::vector<std::vector<unsigned int>> tilesList(numTiles);
-  const unsigned int tileSize = numTiles / 2;
-  for (unsigned int i = 0; i < numTiles - 1; ++i) {
-    for (unsigned int j = i + 1; j < numTiles; ++j) {
-      if (tilesList[i].size() < tileSize) {
-        tilesList[i].push_back(j);
-      } else {
-        tilesList[j].push_back(i);
-      }
+  const unsigned int numTileInteractions = numTiles * (numTiles - 1) / 2;
+  const unsigned int maxNumInteractionsPerTile = (numTileInteractions + numTiles - 1) / numTiles;
+  const unsigned int tileListsSize = numTiles * maxNumInteractionsPerTile;
+  using vec_t = std::vector<unsigned int, CudaHostAllocator<unsigned int>>;
+  vec_t tileListsLen(numTiles, 0);
+  vec_t tileListsStart(numTiles, 0);
+  vec_t tileLists(tileListsSize);
+  for (unsigned int i = 0; i < numTiles; ++i) {
+    tileListsStart[i] = i * maxNumInteractionsPerTile;
+    const unsigned int jStart = i + 1;
+    const unsigned int jEnd = std::min(numTiles, jStart + maxNumInteractionsPerTile);
+    for (unsigned int j = jStart; j < jEnd; ++j) {
+      const unsigned int offset = tileListsLen[i]++;
+      const unsigned int pos = i * maxNumInteractionsPerTile;
+      tileLists[pos+offset] = j;
+    }
+    for (unsigned int j = jEnd; j < numTiles; ++j) {
+      const unsigned int offset = tileListsLen[j]++;
+      const unsigned int pos = j * maxNumInteractionsPerTile;
+      tileLists[pos+offset] = i;
     }
   }
-  // Flattened list
-  std::vector<unsigned int> tilesListFlattened;
-  for (const auto& list: tilesList) {
-    tilesListFlattened.insert(tilesListFlattened.end(), list.begin(), list.end());
-  }
-  // The size of each tile list
-  std::vector<unsigned int> tilesListSizes(tilesList.size());
-  std::transform(
-    tilesList.begin(), tilesList.end(), tilesListSizes.begin(),
-    [](const auto& tile){return tile.size();});
-  // The start index of each tile list
-  std::vector<unsigned int> tilesListStart(tilesList.size(), 0);
-  std::exclusive_scan(tilesListSizes.begin(), tilesListSizes.end(), tilesListStart.begin(), (unsigned int)0);
-  // Copy the data to GPU
-  checkGPUError(cudaMalloc(&d_tilesList, tilesListFlattened.size() * sizeof(unsigned int)));
-  checkGPUError(cudaMemcpy(d_tilesList, tilesListFlattened.data(), tilesListFlattened.size() * sizeof(unsigned int), cudaMemcpyHostToDevice));
-  checkGPUError(cudaMalloc(&d_tilesListSizes, tilesListSizes.size() * sizeof(unsigned int)));
-  checkGPUError(cudaMemcpy(d_tilesListSizes, tilesListSizes.data(), tilesListSizes.size() * sizeof(unsigned int), cudaMemcpyHostToDevice));
-  checkGPUError(cudaMalloc(&d_tilesListStart, tilesListStart.size() * sizeof(unsigned int)));
-  checkGPUError(cudaMemcpy(d_tilesListStart, tilesListStart.data(), tilesListStart.size() * sizeof(unsigned int), cudaMemcpyHostToDevice));
+  checkGPUError(cudaMalloc(&d_tilesList, tileListsSize * sizeof(unsigned int)));
+  checkGPUError(cudaMalloc(&d_tilesListStart, numTiles * sizeof(unsigned int)));
+  checkGPUError(cudaMalloc(&d_tilesListSizes, numTiles * sizeof(unsigned int)));
+  checkGPUError(cudaMemcpy(d_tilesList, tileLists.data(), tileListsSize * sizeof(unsigned int), cudaMemcpyHostToDevice));
+  checkGPUError(cudaMemcpy(d_tilesListStart, tileListsStart.data(), numTiles * sizeof(unsigned int), cudaMemcpyHostToDevice));
+  checkGPUError(cudaMemcpy(d_tilesListSizes, tileListsLen.data(), numTiles * sizeof(unsigned int), cudaMemcpyHostToDevice));
 }
 
 __inline__ __device__ size_t computeGlobalPairlistIDSelfGroup(size_t iid_global, size_t jid_global, size_t numAtoms) {
@@ -960,8 +957,7 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   __shared__ bool isLastBlockDone;
   double ei = 0;
   static constexpr const unsigned int half_tile_size = tileSize / 2;
-  // Number of blocks required to iterate over group1
-  const unsigned int numBlocksInGroup1 = (numAtoms1 + blockSize - 1) / blockSize;
+  // Number of tiles required to iterate over group1
   const unsigned int numTilesInGroup1 = (numAtoms1 + tileSize - 1) / tileSize;
   namespace cg = cooperative_groups;
   const cg::thread_block thb = cg::this_thread_block();
@@ -970,11 +966,15 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
   const unsigned int tileIndexInBlock = tilePartition.meta_group_rank();
   // The thread id in a tile
   const unsigned int threadIndexInTile = tilePartition.thread_rank();
-  for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
-    unsigned int iTileIndexInGrid = i * numTilesPerBlock + tileIndexInBlock;
-    const bool isItileValid = iTileIndexInGrid < numTilesInGroup1;
-    if (isItileValid) {
-      const unsigned int tid = i * blockDim.x + threadIdx.x;
+  for (unsigned int iTile = blockIdx.x * numTilesPerBlock + tileIndexInBlock;
+       iTile < numTilesInGroup1; iTile += numTilesPerBlock * gridDim.x) {
+    const unsigned int tid = iTile * tileSize + threadIndexInTile;
+  // }
+  // for (unsigned int i = blockIdx.x; i < numBlocksInGroup1; i += gridDim.x) {
+  //   unsigned int iTileIndexInGrid = i * numTilesPerBlock + tileIndexInBlock;
+  //   const bool isItileValid = iTileIndexInGrid < numTilesInGroup1;
+    if (true) {
+      // const unsigned int tid = i * blockDim.x + threadIdx.x;
       const bool mask_i = tid < numAtoms1;
       const double x1 = mask_i ? pos1x[tid] : 0;
       const double y1 = mask_i ? pos1y[tid] : 0;
@@ -1064,8 +1064,8 @@ __global__ void computeCoordinationNumberSelfGroupCUDAKernel1(
       }
       tilePartition.sync();
       // Iterate over other tiles
-      const unsigned int jTileStart = tilesListStart[iTileIndexInGrid];
-      const unsigned int numJTiles = tilesListSizes[iTileIndexInGrid];
+      const unsigned int jTileStart = tilesListStart[iTile];
+      const unsigned int numJTiles = tilesListSizes[iTile];
       const unsigned int jTileEnd = jTileStart + numJTiles;
       for (unsigned int l = jTileStart; l < jTileEnd; ++l) {
         const unsigned int jTileIndex = tilesList[l];
