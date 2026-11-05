@@ -85,6 +85,18 @@ private:
 
 class ComputeCoordinationNumberSelfGroupCUDA {
 public:
+#if defined (USE_CUDA)
+  struct TilePairMask {
+    using pairMaskT = uint32_t;
+    pairMaskT pairMask[32];
+  };
+#elif defined (USE_HIP)
+  struct TilePairMask {
+    using pairMaskT = uint64_t;
+    pairMaskT pairMask[64];
+  };
+#else
+#endif
   ComputeCoordinationNumberSelfGroupCUDA(unsigned int self_group_block_size_in = 128, unsigned int tile_size_in = 16);
   ~ComputeCoordinationNumberSelfGroupCUDA();
   void initialize(unsigned int numAtoms, bool usePairlist = false, double pairlistTolerance = 0);
@@ -98,7 +110,7 @@ public:
     const std::vector<cudaGraphNode_t>& dependencies,
     cudaGraph_t& graph);
   // For debug
-  std::vector<char> pairlistToHost() const;
+  std::vector<char> pairlistToHost(unsigned int numAtoms);
   unsigned int getBlockSize() const {return selfGroupBlockSize;}
 private:
   void prepareTilesList(unsigned int numAtoms);
@@ -113,8 +125,10 @@ private:
   unsigned int* d_tilesListSizes = nullptr;
   bool initialized = false;
   bool m_usePairlist = false;
-  size_t pairlistSize = 0;
-  bool* d_pairlist = nullptr;
+  // size_t pairlistSize = 0;
+  // bool* d_pairlist = nullptr;
+  TilePairMask* d_pairListSelf = nullptr;
+  TilePairMask* d_pairList = nullptr;
   double m_pairlistTolerance = 0;
   unsigned int* d_tbcount = nullptr;
   double* d_energy_tmp = nullptr;

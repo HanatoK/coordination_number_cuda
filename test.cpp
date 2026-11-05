@@ -557,7 +557,7 @@ calculationResult testCoordinationNumberSelfCUDA(
   std::cout << fmt::format("Coordination number: {:15.7e}, time (GPU) = {:10.5f} ms, block size = {}\n", *h_energy, fp_ms.count(), block_size);
   const double energy = *h_energy;
   const auto hostGradient1 = testPairlist ? cudaGradient1UsePairlist.toHost() :cudaGradient1.toHost();
-  const auto pairlist = compute.pairlistToHost();
+  const auto pairlist = compute.pairlistToHost(cudaPos1.getNumAtoms());
   checkGPUError(cudaStreamSynchronize(stream));
   checkGPUError(cudaFreeHost(h_energy));
   checkGPUError(cudaGraphDestroy(graph));
@@ -610,10 +610,10 @@ void compareResults(const calculationResult& cpuResult,
   bool pairlist_differ = false;
   if (cpuResult.pairlist.size() == cudaResult.pairlist.size()) {
     for (size_t i = 0; i < cpuResult.pairlist.size(); ++i) {
-      // std::cout << fmt::format("Pairlist at index {}: cpu = {}, gpu = {}\n", i, (int)cpuResult.pairlist[i], (int)cudaResult.pairlist[i]);
       if (cpuResult.pairlist[i] != cudaResult.pairlist[i]) {
         pairlist_differ = true;
-        break;
+        std::cout << fmt::format("Pairlist at index {}: cpu = {}, gpu = {}\n", i, (int)cpuResult.pairlist[i], (int)cudaResult.pairlist[i]);
+        // break;
       }
     }
   } else {
@@ -653,47 +653,53 @@ int main(int argc, char* argv[]) {
 
   CLI11_PARSE(app, argc, argv);
 
-  if (test_numerical_gradient) {
-    testNumericalGradient(test_pairlist);
-  }
+  try {
 
-  if (test_two_groups) {
-    AtomGroupPositions pos1 = generateRandomAtomGroupPositions(123, group1_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
-    AtomGroupPositions pos2 = generateRandomAtomGroupPositions(456, group2_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
-    double cutoffDistance = 6.0;
-    if (!test_pairlist) {
-      const auto cpuResult = testCoordinationNumber(pos1, pos2, cutoffDistance);
-      const auto gpuResult = testCoordinationNumberCUDA(pos1, pos2, cutoffDistance, test_pairlist);
-      const auto gpuResult2 = testCoordinationNumberCUDA2(pos1, pos2, cutoffDistance, test_pairlist);
-      compareResults(cpuResult, gpuResult, true);
-      compareResults(cpuResult, gpuResult2, true);
-    } else {
-      const auto cpuResult = testCoordinationNumberPairlist(pos1, pos2, cutoffDistance);
-      const auto gpuResult = testCoordinationNumberCUDA(pos1, pos2, cutoffDistance, test_pairlist);
-      const auto gpuResult2 = testCoordinationNumberCUDA2(pos1, pos2, cutoffDistance, test_pairlist);
-      compareResults(cpuResult, gpuResult, true);
-      compareResults(cpuResult, gpuResult2, true);
+    if (test_numerical_gradient) {
+      testNumericalGradient(test_pairlist);
     }
-  }
 
-  if (test_self_group) {
-    AtomGroupPositions pos1 = generateRandomAtomGroupPositions(123, group1_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
-    double cutoffDistance = 6.0;
-    if (!test_pairlist) {
-      const auto cpuResult = testCoordinationNumberSelf(pos1, cutoffDistance);
-      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, false, self_group_block_size, self_group_tile_size);
-#ifdef TRY_INTERP
-      const auto cpuResultInterp = testCoordinationNumberSelfInterp(pos1, cutoffDistance);
-#endif
-      compareResults(cpuResult, gpuResult, false);
-#ifdef TRY_INTERP
-      compareResults(cpuResult, cpuResultInterp, false, "CPU", "CPU Interp");
-#endif
-    } else {
-      const auto cpuResult = testCoordinationNumberSelfPairlist(pos1, cutoffDistance);
-      const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, true, self_group_block_size, self_group_tile_size);
-      compareResults(cpuResult, gpuResult, false);
+    if (test_two_groups) {
+      AtomGroupPositions pos1 = generateRandomAtomGroupPositions(123, group1_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
+      AtomGroupPositions pos2 = generateRandomAtomGroupPositions(456, group2_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
+      double cutoffDistance = 6.0;
+      if (!test_pairlist) {
+        const auto cpuResult = testCoordinationNumber(pos1, pos2, cutoffDistance);
+        const auto gpuResult = testCoordinationNumberCUDA(pos1, pos2, cutoffDistance, test_pairlist);
+        const auto gpuResult2 = testCoordinationNumberCUDA2(pos1, pos2, cutoffDistance, test_pairlist);
+        compareResults(cpuResult, gpuResult, true);
+        compareResults(cpuResult, gpuResult2, true);
+      } else {
+        const auto cpuResult = testCoordinationNumberPairlist(pos1, pos2, cutoffDistance);
+        const auto gpuResult = testCoordinationNumberCUDA(pos1, pos2, cutoffDistance, test_pairlist);
+        const auto gpuResult2 = testCoordinationNumberCUDA2(pos1, pos2, cutoffDistance, test_pairlist);
+        compareResults(cpuResult, gpuResult, true);
+        compareResults(cpuResult, gpuResult2, true);
+      }
     }
+
+    if (test_self_group) {
+      AtomGroupPositions pos1 = generateRandomAtomGroupPositions(123, group1_size, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
+      double cutoffDistance = 6.0;
+      if (!test_pairlist) {
+        const auto cpuResult = testCoordinationNumberSelf(pos1, cutoffDistance);
+        const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, false, self_group_block_size, self_group_tile_size);
+  #ifdef TRY_INTERP
+        const auto cpuResultInterp = testCoordinationNumberSelfInterp(pos1, cutoffDistance);
+  #endif
+        compareResults(cpuResult, gpuResult, false);
+  #ifdef TRY_INTERP
+        compareResults(cpuResult, cpuResultInterp, false, "CPU", "CPU Interp");
+  #endif
+      } else {
+        const auto cpuResult = testCoordinationNumberSelfPairlist(pos1, cutoffDistance);
+        const auto gpuResult = testCoordinationNumberSelfCUDA(pos1, cutoffDistance, true, self_group_block_size, self_group_tile_size);
+        compareResults(cpuResult, gpuResult, false);
+      }
+    }
+  } catch (std::exception& e) {
+    std::cerr << e.what() << std::endl;
+    return 1;
   }
 
   return 0;
